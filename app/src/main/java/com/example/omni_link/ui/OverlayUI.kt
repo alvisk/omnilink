@@ -8,7 +8,9 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -156,6 +158,7 @@ fun SuggestionsPanel(
                 // Header
                 SuggestionsPanelHeader(
                         isLoading = state.isLoading,
+                        isStreaming = state.isStreaming,
                         suggestionCount = state.suggestions.size,
                         onDismiss = onDismiss
                 )
@@ -166,7 +169,10 @@ fun SuggestionsPanel(
                 // Content
                 when {
                     state.isLoading -> {
-                        LoadingState()
+                        StreamingLoadingState(
+                                streamingText = state.streamingText,
+                                isStreaming = state.isStreaming
+                        )
                     }
                     state.error != null -> {
                         ErrorState(error = state.error)
@@ -189,6 +195,7 @@ fun SuggestionsPanel(
 @Composable
 private fun SuggestionsPanelHeader(
         isLoading: Boolean,
+        isStreaming: Boolean = false,
         suggestionCount: Int,
         onDismiss: () -> Unit
 ) {
@@ -218,7 +225,7 @@ private fun SuggestionsPanelHeader(
                                 label = "alpha"
                         )
                 Text(
-                        text = "...",
+                        text = if (isStreaming) "⚡" else "...",
                         style = MaterialTheme.typography.labelSmall,
                         color = OmniBlack.copy(alpha = alpha),
                         fontWeight = FontWeight.Bold
@@ -243,9 +250,14 @@ private fun SuggestionsPanelHeader(
                     letterSpacing = 3.sp
             )
             Text(
-                    text = if (isLoading) "ANALYZING SCREEN..." else "$suggestionCount AVAILABLE",
+                    text =
+                            when {
+                                isStreaming -> "AI THINKING..."
+                                isLoading -> "ANALYZING SCREEN..."
+                                else -> "$suggestionCount AVAILABLE"
+                            },
                     style = MaterialTheme.typography.labelSmall,
-                    color = OmniGrayText,
+                    color = if (isStreaming) OmniYellow else OmniGrayText,
                     letterSpacing = 1.sp
             )
         }
@@ -294,6 +306,105 @@ private fun LoadingState() {
                 color = OmniGrayText,
                 letterSpacing = 2.sp
         )
+    }
+}
+
+/** Loading state that shows streaming AI output in real-time */
+@Composable
+private fun StreamingLoadingState(streamingText: String, isStreaming: Boolean) {
+    val scrollState = rememberScrollState()
+
+    // Auto-scroll to bottom as text appears
+    LaunchedEffect(streamingText) { scrollState.animateScrollTo(scrollState.maxValue) }
+
+    Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Animated thinking indicator
+        Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+        ) {
+            repeat(4) { index ->
+                val infiniteTransition = rememberInfiniteTransition(label = "pulse$index")
+                val alpha by
+                        infiniteTransition.animateFloat(
+                                initialValue = 0.3f,
+                                targetValue = 1f,
+                                animationSpec =
+                                        infiniteRepeatable(
+                                                animation = tween(600, delayMillis = index * 150),
+                                                repeatMode = RepeatMode.Reverse
+                                        ),
+                                label = "pulseAlpha$index"
+                        )
+                Box(modifier = Modifier.size(12.dp).background(OmniYellow.copy(alpha = alpha)))
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Text(
+                    text = if (isStreaming) "AI THINKING" else "ANALYZING",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OmniYellow,
+                    letterSpacing = 2.sp,
+                    fontWeight = FontWeight.Bold
+            )
+        }
+
+        // Streaming text output - show the AI's thinking
+        if (streamingText.isNotEmpty()) {
+            Box(
+                    modifier =
+                            Modifier.fillMaxWidth()
+                                    .heightIn(min = 60.dp, max = 200.dp)
+                                    .background(OmniGrayDark)
+                                    .border(1.dp, OmniGrayMid)
+                                    .padding(12.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().verticalScroll(scrollState)) {
+                    // Display streaming text with a blinking cursor
+                    Row {
+                        Text(
+                                text = streamingText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OmniGrayLight,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                lineHeight = 18.sp
+                        )
+
+                        // Blinking cursor
+                        val cursorAlpha by
+                                rememberInfiniteTransition(label = "cursor")
+                                        .animateFloat(
+                                                initialValue = 0f,
+                                                targetValue = 1f,
+                                                animationSpec =
+                                                        infiniteRepeatable(
+                                                                animation = tween(500),
+                                                                repeatMode = RepeatMode.Reverse
+                                                        ),
+                                                label = "cursorAlpha"
+                                        )
+                        Text(
+                                text = "▌",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OmniYellow.copy(alpha = cursorAlpha),
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        } else {
+            // Show placeholder when no streaming text yet
+            Text(
+                    text = "Waiting for AI response...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OmniGrayText
+            )
+        }
     }
 }
 
@@ -377,7 +488,7 @@ private fun SuggestionsList(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(suggestions) { suggestion ->
+        items(suggestions, key = { it.id }) { suggestion ->
             SuggestionCard(suggestion = suggestion, onClick = { onSuggestionClick(suggestion) })
         }
     }

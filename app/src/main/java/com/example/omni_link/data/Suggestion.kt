@@ -42,5 +42,7 @@ data class SuggestionState(
         val isLoading: Boolean = false,
         val suggestions: List<Suggestion> = emptyList(),
         val error: String? = null,
-        val lastScreenContext: String? = null
+        val lastScreenContext: String? = null,
+        val streamingText: String = "", // Real-time AI thinking output
+        val isStreaming: Boolean = false
 )

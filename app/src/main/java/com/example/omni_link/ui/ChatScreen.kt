@@ -143,7 +143,9 @@ fun ChatScreen(viewModel: OmniViewModel = viewModel()) {
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(messages) { message -> BlockyChatBubble(message = message) }
+                        items(messages, key = { it.id }) { message ->
+                            BlockyChatBubble(message = message)
+                        }
 
                         if (uiState.isThinking) {
                             item { BlockyThinkingIndicator() }

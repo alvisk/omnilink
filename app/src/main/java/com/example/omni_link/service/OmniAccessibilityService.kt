@@ -1294,6 +1294,9 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         container.setViewTreeLifecycleOwner(this)
         container.setViewTreeSavedStateRegistryOwner(this)
 
+        val clipboardManager =
+                getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+
         val composeView =
                 ComposeView(this).apply {
                     setContent {
@@ -1306,7 +1309,21 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                                     hideDebugOverlay()
                                 },
                                 onClear = { DebugLogManager.clearLogs() },
-                                onToggleExpand = { DebugLogManager.toggleExpanded() }
+                                onToggleExpand = { DebugLogManager.toggleExpanded() },
+                                onCopyLogs = { logsText: String ->
+                                    val clip =
+                                            android.content.ClipData.newPlainText(
+                                                    "Debug Logs",
+                                                    logsText
+                                            )
+                                    clipboardManager.setPrimaryClip(clip)
+                                    android.widget.Toast.makeText(
+                                                    this@OmniAccessibilityService,
+                                                    "Logs copied to clipboard",
+                                                    android.widget.Toast.LENGTH_SHORT
+                                            )
+                                            .show()
+                                }
                         )
                     }
                 }

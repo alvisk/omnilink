@@ -3,6 +3,7 @@ package com.example.omni_link.debug
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -10,13 +11,17 @@ import kotlinx.coroutines.flow.update
 
 /** A single debug log entry */
 data class DebugLogEntry(
-        val id: Long = System.currentTimeMillis(),
+        val id: Long = idCounter.incrementAndGet(),
         val timestamp: Long = System.currentTimeMillis(),
         val level: LogLevel,
         val tag: String,
         val message: String,
         val details: String? = null
 ) {
+    companion object {
+        private val idCounter = AtomicLong(0)
+    }
+
     enum class LogLevel {
         INFO, // General information
         PROMPT, // AI prompt being sent

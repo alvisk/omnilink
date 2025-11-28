@@ -19,7 +19,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
@@ -99,6 +98,7 @@ fun DebugOverlayPanel(
         onDismiss: () -> Unit,
         onClear: () -> Unit,
         onToggleExpand: () -> Unit,
+        onCopyLogs: (String) -> Unit,
         modifier: Modifier = Modifier
 ) {
         val listState = rememberLazyListState()
@@ -142,7 +142,18 @@ fun DebugOverlayPanel(
                                         isExpanded = state.isExpanded,
                                         onDismiss = onDismiss,
                                         onClear = onClear,
-                                        onToggleExpand = onToggleExpand
+                                        onToggleExpand = onToggleExpand,
+                                        onCopy = {
+                                                val logsText =
+                                                        filteredLogs.joinToString("\n") { log ->
+                                                                "[${log.formattedTime()}] [${log.level}] ${log.tag}: ${log.message}" +
+                                                                        (log.details?.let {
+                                                                                "\n  $it"
+                                                                        }
+                                                                                ?: "")
+                                                        }
+                                                onCopyLogs(logsText)
+                                        }
                                 )
 
                                 // Green terminal line
@@ -185,7 +196,8 @@ private fun DebugPanelHeader(
         isExpanded: Boolean,
         onDismiss: () -> Unit,
         onClear: () -> Unit,
-        onToggleExpand: () -> Unit
+        onToggleExpand: () -> Unit,
+        onCopy: () -> Unit
 ) {
         Row(
                 modifier =
@@ -229,6 +241,19 @@ private fun DebugPanelHeader(
 
                 // Action buttons
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        // Copy button
+                        IconButton(
+                                onClick = onCopy,
+                                modifier = Modifier.size(28.dp).background(OmniGrayMid)
+                        ) {
+                                Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Copy logs",
+                                        tint = OmniGrayText,
+                                        modifier = Modifier.size(16.dp)
+                                )
+                        }
+
                         // Clear button
                         IconButton(
                                 onClick = onClear,
@@ -471,7 +496,8 @@ fun DebugOverlay(
         state: DebugOverlayState,
         onDismiss: () -> Unit,
         onClear: () -> Unit,
-        onToggleExpand: () -> Unit
+        onToggleExpand: () -> Unit,
+        onCopyLogs: (String) -> Unit
 ) {
         Box(modifier = Modifier.fillMaxSize()) {
                 DebugOverlayPanel(
@@ -479,6 +505,7 @@ fun DebugOverlay(
                         onDismiss = onDismiss,
                         onClear = onClear,
                         onToggleExpand = onToggleExpand,
+                        onCopyLogs = onCopyLogs,
                         modifier = Modifier.align(Alignment.TopCenter)
                 )
         }

@@ -3,6 +3,7 @@ package com.example.omni_link.ai
 import com.example.omni_link.data.ActionPlan
 import com.example.omni_link.data.ScreenState
 import com.example.omni_link.data.Suggestion
+import kotlinx.coroutines.flow.Flow
 
 /**
  * Abstraction layer for LLM inference Implement this interface with Cactus SDK, llama.cpp, or any
@@ -34,10 +35,34 @@ interface LLMProvider {
             screenState: ScreenState,
             maxSuggestions: Int = 5
     ): Result<List<Suggestion>>
+
+    /**
+     * Generate contextual suggestions with streaming output. Emits SuggestionStreamEvent objects:
+     * - Token: individual tokens as they're generated
+     * - Complete: final parsed suggestions
+     * - Error: if something goes wrong
+     */
+    fun generateSuggestionsStreaming(
+            screenState: ScreenState,
+            maxSuggestions: Int = 5
+    ): Flow<SuggestionStreamEvent>
+}
+
+/** Events emitted during streaming suggestion generation */
+sealed class SuggestionStreamEvent {
+    /** A token was generated */
+    data class Token(val token: String, val fullText: String) : SuggestionStreamEvent()
+
+    /** Generation complete with parsed suggestions */
+    data class Complete(val suggestions: List<Suggestion>) : SuggestionStreamEvent()
+
+    /** An error occurred */
+    data class Error(val message: String) : SuggestionStreamEvent()
 }
 
 /** A message in the conversation */
 data class ChatMessage(
+        val id: String = java.util.UUID.randomUUID().toString(),
         val role: Role,
         val content: String,
         val timestamp: Long = System.currentTimeMillis()

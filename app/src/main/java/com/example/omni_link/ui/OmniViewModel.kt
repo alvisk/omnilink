@@ -572,7 +572,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // SUGGESTION OVERLAY METHODS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /** Generate suggestions based on current screen context */
+    /** Generate suggestions based on current screen context with streaming output */
     fun generateSuggestions() {
         viewModelScope.launch {
             if (!uiState.value.isModelReady) {
@@ -581,7 +581,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                             isVisible = true,
                             isLoading = false,
                             error = "No AI model loaded. Please download a model first.",
-                            suggestions = emptyList()
+                            suggestions = emptyList(),
+                            streamingText = "",
+                            isStreaming = false
                     )
                 }
                 return@launch
@@ -595,49 +597,76 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                             isLoading = false,
                             error =
                                     "Cannot capture screen. Make sure accessibility service is enabled.",
-                            suggestions = emptyList()
+                            suggestions = emptyList(),
+                            streamingText = "",
+                            isStreaming = false
                     )
                 }
                 return@launch
             }
 
-            // Show loading state
+            // Show loading state with streaming enabled
             _suggestionState.update {
                 it.copy(
                         isVisible = true,
                         isLoading = true,
+                        isStreaming = true,
+                        streamingText = "",
                         error = null,
                         lastScreenContext = currentScreen.toPromptContext()
                 )
             }
 
             try {
-                val result = llmProvider.generateSuggestions(currentScreen, maxSuggestions = 5)
-
-                if (result.isSuccess) {
-                    val suggestions = result.getOrThrow()
-                    Log.d(TAG, "Generated ${suggestions.size} suggestions")
-                    _suggestionState.update {
-                        it.copy(
-                                isLoading = false,
-                                suggestions = suggestions.sortedByDescending { s -> s.priority },
-                                error = null
-                        )
-                    }
-                } else {
-                    val error = result.exceptionOrNull()?.message ?: "Unknown error"
-                    Log.e(TAG, "Suggestion generation failed: $error")
-                    _suggestionState.update {
-                        it.copy(isLoading = false, error = error, suggestions = emptyList())
-                    }
-                }
+                // Use streaming generation
+                llmProvider.generateSuggestionsStreaming(currentScreen, maxSuggestions = 5)
+                        .collect { event ->
+                            when (event) {
+                                is com.example.omni_link.ai.SuggestionStreamEvent.Token -> {
+                                    // Update streaming text as tokens arrive
+                                    _suggestionState.update {
+                                        it.copy(streamingText = event.fullText)
+                                    }
+                                }
+                                is com.example.omni_link.ai.SuggestionStreamEvent.Complete -> {
+                                    // Generation complete
+                                    Log.d(TAG, "Generated ${event.suggestions.size} suggestions")
+                                    _suggestionState.update {
+                                        it.copy(
+                                                isLoading = false,
+                                                isStreaming = false,
+                                                suggestions =
+                                                        event.suggestions.sortedByDescending { s ->
+                                                            s.priority
+                                                        },
+                                                error = null,
+                                                streamingText = ""
+                                        )
+                                    }
+                                }
+                                is com.example.omni_link.ai.SuggestionStreamEvent.Error -> {
+                                    Log.e(TAG, "Suggestion generation failed: ${event.message}")
+                                    _suggestionState.update {
+                                        it.copy(
+                                                isLoading = false,
+                                                isStreaming = false,
+                                                error = event.message,
+                                                suggestions = emptyList(),
+                                                streamingText = ""
+                                        )
+                                    }
+                                }
+                            }
+                        }
             } catch (e: Exception) {
                 Log.e(TAG, "Error generating suggestions", e)
                 _suggestionState.update {
                     it.copy(
                             isLoading = false,
+                            isStreaming = false,
                             error = e.message ?: "Failed to generate suggestions",
-                            suggestions = emptyList()
+                            suggestions = emptyList(),
+                            streamingText = ""
                     )
                 }
             }

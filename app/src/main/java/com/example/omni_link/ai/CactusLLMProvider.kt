@@ -16,6 +16,8 @@ import com.google.gson.JsonParser
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 
 /**
@@ -584,53 +586,30 @@ Always respond in this JSON format:
         }
     }
 
-    /** Generate AI-powered contextual device action suggestions (not used currently) */
+    /** Generate AI-powered contextual device action suggestions based on screen content */
     private suspend fun generateAISuggestionsFromLLM(
             screenState: ScreenState,
             screenContext: String,
             maxSuggestions: Int
     ): List<Suggestion> {
+        // Simplified, clearer prompt for better model compliance
+        // Using explicit JSON format with clear field names
         val suggestionPrompt =
-                """
-You are analyzing a screen and need to suggest helpful DEVICE ACTIONS. Based on the current screen context, provide $maxSuggestions useful device action suggestions.
+                """You are a mobile assistant. Based on the screen below, suggest $maxSuggestions helpful actions.
 
+SCREEN:
 $screenContext
 
-Respond with a JSON array of suggestions. ONLY suggest device actions from this list:
-- calendar: Open calendar or create events
-- dial: Open dialer with phone number
-- sms: Send text message
-- alarm: Set an alarm
-- timer: Set a timer
-- search: Web search
-- url: Open a URL
-- maps: Open maps
-- navigate: Start navigation
-- email: Send email
-- camera: Take photo
-- video: Record video
-- share: Share content
-- copy: Copy to clipboard
-- music: Play media
-- settings_wifi: WiFi settings
-- settings_bluetooth: Bluetooth settings
-- settings_display: Display settings
-- settings_sound: Sound settings
-- settings_battery: Battery settings
+Return ONLY a JSON array. Each object must have these exact fields:
+- "title": short action name with emoji (e.g. "📞 Call number")
+- "description": one sentence explanation
+- "type": one of: dial, sms, search, maps, calendar, alarm, timer, email, camera, copy, share, settings_wifi, settings_bluetooth
+- "value": the target (phone number, search query, address, etc.)
 
-```json
-[
-  {
-    "title": "Short action title with emoji",
-    "description": "Brief description of what this does",
-    "type": "calendar|dial|sms|alarm|timer|search|url|maps|navigate|email|camera|video|share|copy|music|settings_wifi|settings_bluetooth|settings_display|settings_sound|settings_battery",
-    "value": "optional value like phone number, URL, search query"
-  }
-]
-```
+Example response format:
+[{"title":"📞 Call 07483225245","description":"Dial this phone number","type":"dial","value":"07483225245"}]
 
-Focus on device actions that would be helpful based on the current context.
-""".trimIndent()
+JSON array:"""
 
         DebugLogManager.prompt(
                 TAG,
@@ -641,11 +620,12 @@ Focus on device actions that would be helpful based on the current context.
         val cactusMessages = listOf(CactusChatMessage(content = suggestionPrompt, role = "user"))
 
         val startTime = System.currentTimeMillis()
-        // 🚀 PERFORMANCE: Lower temp & fewer tokens for fast suggestions
+        // 🚀 PERFORMANCE: Increased tokens slightly for complete JSON, very low temp for
+        // consistency
         val result =
                 cactusLM!!.generateCompletion(
                         messages = cactusMessages,
-                        params = CactusCompletionParams(maxTokens = 256, temperature = 0.3)
+                        params = CactusCompletionParams(maxTokens = 400, temperature = 0.1)
                 )
         val inferenceTime = System.currentTimeMillis() - startTime
 
@@ -657,13 +637,181 @@ Focus on device actions that would be helpful based on the current context.
         )
 
         if (!responseContent.isNullOrBlank()) {
-            val suggestions = parseSuggestionsFromAI(responseContent, screenState)
-            DebugLogManager.debug(TAG, "Parsed ${suggestions.size} suggestions from AI response")
-            return suggestions
+            // Aggressively clean the response
+            val cleanedResponse = cleanAIResponse(responseContent)
+            DebugLogManager.debug(TAG, "Cleaned response", cleanedResponse)
+
+            val suggestions = parseSuggestionsFromAI(cleanedResponse, screenState)
+            if (suggestions.isNotEmpty()) {
+                DebugLogManager.debug(
+                        TAG,
+                        "Parsed ${suggestions.size} suggestions from AI response"
+                )
+                return suggestions
+            } else {
+                DebugLogManager.info(
+                        TAG,
+                        "No valid suggestions parsed, using context-aware fallback"
+                )
+                // Try to extract context from screen and generate smart suggestions
+                return generateContextAwareFallback(screenState, screenContext, maxSuggestions)
+            }
         }
 
         DebugLogManager.info(TAG, "Empty AI response, using fallback")
         return generateSmartSuggestions(screenState, screenContext, maxSuggestions)
+    }
+
+    /** Clean AI response by removing thinking tags, markdown, and other artifacts */
+    private fun cleanAIResponse(response: String): String {
+        var cleaned = response
+
+        // Remove various thinking tag formats (Qwen3, DeepSeek, etc.)
+        cleaned = cleaned.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
+        cleaned =
+                cleaned.replace(
+                        Regex("<thinking>[\\s\\S]*?</thinking>", RegexOption.IGNORE_CASE),
+                        ""
+                )
+        cleaned = cleaned.replace(Regex("```json\\s*", RegexOption.IGNORE_CASE), "")
+        cleaned = cleaned.replace(Regex("```\\s*$", RegexOption.MULTILINE), "")
+        cleaned = cleaned.replace(Regex("^```\\s*", RegexOption.MULTILINE), "")
+
+        // Remove any text before the first [ (common for models that add explanations)
+        val arrayStart = cleaned.indexOf('[')
+        if (arrayStart > 0) {
+            cleaned = cleaned.substring(arrayStart)
+        }
+
+        // Remove any text after the last complete ] that closes the array
+        val arrayEnd = cleaned.lastIndexOf(']')
+        if (arrayEnd > 0) {
+            cleaned = cleaned.substring(0, arrayEnd + 1)
+        }
+
+        return cleaned.trim()
+    }
+
+    /** Generate context-aware suggestions when AI parsing fails */
+    private fun generateContextAwareFallback(
+            screenState: ScreenState,
+            screenContext: String,
+            maxSuggestions: Int
+    ): List<Suggestion> {
+        val suggestions = mutableListOf<Suggestion>()
+        val contextLower = screenContext.lowercase()
+
+        // Extract phone numbers from screen
+        val phonePattern =
+                Regex("""(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}|\d{10,11}""")
+        phonePattern.findAll(screenContext).take(2).forEach { match ->
+            val phone = match.value.replace(Regex("[\\s\\-\\(\\)]"), "")
+            suggestions.add(
+                    createSuggestion(
+                            "📞 Call $phone",
+                            "Dial this phone number",
+                            Suggestion.SuggestionIcon.PHONE,
+                            AIAction.DialNumber(phone)
+                    )
+            )
+            suggestions.add(
+                    createSuggestion(
+                            "💬 Text $phone",
+                            "Send SMS to this number",
+                            Suggestion.SuggestionIcon.SMS,
+                            AIAction.SendSMS(phone, "")
+                    )
+            )
+        }
+
+        // Extract email addresses
+        val emailPattern = Regex("""[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}""")
+        emailPattern.findAll(screenContext).take(1).forEach { match ->
+            suggestions.add(
+                    createSuggestion(
+                            "✉️ Email ${match.value}",
+                            "Send an email",
+                            Suggestion.SuggestionIcon.EMAIL,
+                            AIAction.SendEmail(match.value, null, null)
+                    )
+            )
+        }
+
+        // Extract URLs
+        val urlPattern = Regex("""https?://[^\s<>"{}|\\^`\[\]]+""", RegexOption.IGNORE_CASE)
+        urlPattern.findAll(screenContext).take(1).forEach { match ->
+            suggestions.add(
+                    createSuggestion(
+                            "🌐 Open link",
+                            "Open this URL",
+                            Suggestion.SuggestionIcon.WEB,
+                            AIAction.OpenURL(match.value)
+                    )
+            )
+        }
+
+        // Extract addresses/locations (simple heuristic)
+        if (contextLower.contains("address") ||
+                        contextLower.contains("location") ||
+                        contextLower.contains("street") ||
+                        contextLower.contains("ave") ||
+                        contextLower.contains("blvd") ||
+                        contextLower.contains("road")
+        ) {
+            suggestions.add(
+                    createSuggestion(
+                            "🗺️ Open Maps",
+                            "View location on maps",
+                            Suggestion.SuggestionIcon.MAP,
+                            AIAction.OpenMaps(query = "")
+                    )
+            )
+        }
+
+        // Browser-specific suggestions
+        val packageName = screenState.packageName?.lowercase() ?: ""
+        if (packageName.contains("chrome") || packageName.contains("browser")) {
+            // Check if there's a search query visible
+            if (contextLower.contains("search") || contextLower.contains("google")) {
+                suggestions.add(
+                        createSuggestion(
+                                "🔍 New search",
+                                "Search the web",
+                                Suggestion.SuggestionIcon.SEARCH,
+                                AIAction.WebSearch("")
+                        )
+                )
+            }
+            suggestions.add(
+                    createSuggestion(
+                            "📋 Copy page URL",
+                            "Copy current page link",
+                            Suggestion.SuggestionIcon.COPY,
+                            AIAction.CopyToClipboard("")
+                    )
+            )
+            suggestions.add(
+                    createSuggestion(
+                            "📤 Share page",
+                            "Share this page",
+                            Suggestion.SuggestionIcon.SHARE,
+                            AIAction.ShareText("")
+                    )
+            )
+        }
+
+        // If we still don't have enough, add smart suggestions
+        if (suggestions.size < maxSuggestions) {
+            val smartSuggestions =
+                    generateSmartSuggestions(
+                            screenState,
+                            screenContext,
+                            maxSuggestions - suggestions.size
+                    )
+            suggestions.addAll(smartSuggestions)
+        }
+
+        return suggestions.take(maxSuggestions)
     }
 
     /** Parse AI-generated suggestions from response */
@@ -672,27 +820,110 @@ Focus on device actions that would be helpful based on the current context.
             screenState: ScreenState
     ): List<Suggestion> {
         return try {
-            val jsonString = extractJsonArrayFromResponse(response) ?: return emptyList()
+            val jsonString = extractJsonArrayFromResponse(response)
+            if (jsonString == null) {
+                DebugLogManager.error(TAG, "No valid JSON array found in response", response)
+                return emptyList()
+            }
+
             val jsonArray = JsonParser.parseString(jsonString).asJsonArray
+            DebugLogManager.debug(TAG, "Parsing ${jsonArray.size()} suggestion objects")
 
             jsonArray.mapIndexedNotNull { index, element ->
-                val obj = element.asJsonObject
-                val title = obj.get("title")?.asString ?: return@mapIndexedNotNull null
-                val description = obj.get("description")?.asString ?: ""
-                val type = obj.get("type")?.asString ?: "info"
-                val target = obj.get("target")?.asString
+                try {
+                    val obj = element.asJsonObject
 
-                Suggestion(
-                        id = UUID.randomUUID().toString(),
-                        title = title,
-                        description = description,
-                        action = createActionFromType(type, target, screenState),
-                        icon = getIconFromType(type),
-                        priority = jsonArray.size() - index
-                )
+                    // Validate required fields exist and are non-empty
+                    val title = obj.get("title")?.asString?.takeIf { it.isNotBlank() }
+                    val type = obj.get("type")?.asString?.takeIf { it.isNotBlank() }
+
+                    // Reject malformed objects (e.g. {"TextView": ""})
+                    if (title == null || type == null) {
+                        DebugLogManager.debug(
+                                TAG,
+                                "Skipping malformed object at index $index: missing title or type"
+                        )
+                        return@mapIndexedNotNull null
+                    }
+
+                    // Validate type is a known action type
+                    val knownTypes =
+                            setOf(
+                                    "click",
+                                    "type",
+                                    "scroll",
+                                    "navigate",
+                                    "back",
+                                    "app",
+                                    "search",
+                                    "share",
+                                    "copy",
+                                    "info",
+                                    "calendar",
+                                    "dial",
+                                    "phone",
+                                    "call",
+                                    "sms",
+                                    "message",
+                                    "text",
+                                    "alarm",
+                                    "timer",
+                                    "email",
+                                    "maps",
+                                    "map",
+                                    "navigation",
+                                    "camera",
+                                    "photo",
+                                    "video",
+                                    "music",
+                                    "media",
+                                    "play",
+                                    "url",
+                                    "web",
+                                    "browser",
+                                    "settings",
+                                    "settings_wifi",
+                                    "settings_bluetooth",
+                                    "settings_display",
+                                    "settings_sound",
+                                    "settings_battery"
+                            )
+                    if (type.lowercase() !in knownTypes) {
+                        DebugLogManager.debug(
+                                TAG,
+                                "Skipping object at index $index: unknown type '$type'"
+                        )
+                        return@mapIndexedNotNull null
+                    }
+
+                    val description = obj.get("description")?.asString ?: ""
+                    // Support both "value" (from prompt) and "target" (legacy) field names
+                    val value = obj.get("value")?.asString ?: obj.get("target")?.asString
+
+                    Suggestion(
+                            id = UUID.randomUUID().toString(),
+                            title = title,
+                            description = description,
+                            action = createActionFromType(type, value, screenState),
+                            icon = getIconFromType(type),
+                            priority = jsonArray.size() - index
+                    )
+                } catch (e: Exception) {
+                    DebugLogManager.error(
+                            TAG,
+                            "Failed to parse suggestion at index $index",
+                            e.message
+                    )
+                    null
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse AI suggestions", e)
+            DebugLogManager.error(
+                    TAG,
+                    "JSON parse error",
+                    "${e.message}\n\nRaw response:\n$response"
+            )
             emptyList()
         }
     }
@@ -705,8 +936,29 @@ Focus on device actions that would be helpful based on the current context.
         if (arrayStart >= 0) {
             var bracketCount = 0
             var endIndex = -1
+            var lastCompleteObjectEnd = -1 // Track last complete object for recovery
+            var inString = false
+            var escaped = false
+
             for (i in arrayStart until trimmed.length) {
-                when (trimmed[i]) {
+                val c = trimmed[i]
+
+                // Handle string escaping
+                if (escaped) {
+                    escaped = false
+                    continue
+                }
+                if (c == '\\') {
+                    escaped = true
+                    continue
+                }
+                if (c == '"') {
+                    inString = !inString
+                    continue
+                }
+                if (inString) continue
+
+                when (c) {
                     '[' -> bracketCount++
                     ']' -> {
                         bracketCount--
@@ -715,11 +967,35 @@ Focus on device actions that would be helpful based on the current context.
                             break
                         }
                     }
+                    '}' -> {
+                        // Track end of complete objects at array level
+                        if (bracketCount == 1) {
+                            lastCompleteObjectEnd = i
+                        }
+                    }
                 }
             }
+
             if (endIndex > arrayStart) {
                 return trimmed.substring(arrayStart, endIndex + 1)
             }
+
+            // JSON was truncated - try to salvage complete objects
+            if (lastCompleteObjectEnd > arrayStart) {
+                val salvaged = trimmed.substring(arrayStart, lastCompleteObjectEnd + 1) + "]"
+                DebugLogManager.info(
+                        TAG,
+                        "JSON truncated - salvaged partial response",
+                        "Original length: ${trimmed.length}, salvaged: $salvaged"
+                )
+                return salvaged
+            }
+
+            DebugLogManager.error(
+                    TAG,
+                    "JSON array incomplete - no closing bracket found",
+                    "Response was likely cut off by token limit. Raw response:\n$trimmed"
+            )
         }
         return null
     }
@@ -730,11 +1006,35 @@ Focus on device actions that would be helpful based on the current context.
             screenState: ScreenState
     ): AIAction? {
         return when (type.lowercase()) {
+            // UI interaction actions
             "click" -> target?.let { AIAction.Click(it) }
             "type" -> target?.let { AIAction.Type(it, "") }
             "scroll" -> AIAction.Scroll(AIAction.ScrollDirection.DOWN)
             "navigate", "back" -> AIAction.Back
             "app" -> target?.let { AIAction.OpenApp(it) }
+            // Device intent actions
+            "calendar" -> AIAction.OpenCalendar(title = target)
+            "dial", "phone" -> AIAction.DialNumber(target ?: "")
+            "call" -> AIAction.CallNumber(target ?: "")
+            "sms", "message", "text" -> AIAction.SendSMS(target ?: "", "")
+            "alarm" -> AIAction.SetAlarm(8, 0, target)
+            "timer" -> AIAction.SetTimer(target?.toIntOrNull() ?: 60, null)
+            "email" -> AIAction.SendEmail(target ?: "", null, null)
+            "maps", "map" -> AIAction.OpenMaps(query = target, navigate = false)
+            "navigation" -> AIAction.OpenMaps(query = target, navigate = true)
+            "camera", "photo" -> AIAction.CaptureMedia(video = false)
+            "video" -> AIAction.CaptureMedia(video = true)
+            "music", "media", "play" -> AIAction.PlayMedia(target ?: "")
+            "search" -> AIAction.WebSearch(target ?: "")
+            "url", "web", "browser" -> AIAction.OpenURL(target ?: "https://google.com")
+            "share" -> AIAction.ShareText(target ?: "")
+            "copy" -> AIAction.CopyToClipboard(target ?: "")
+            "settings" -> AIAction.OpenSettings(AIAction.SettingsSection.MAIN)
+            "settings_wifi" -> AIAction.OpenSettings(AIAction.SettingsSection.WIFI)
+            "settings_bluetooth" -> AIAction.OpenSettings(AIAction.SettingsSection.BLUETOOTH)
+            "settings_display" -> AIAction.OpenSettings(AIAction.SettingsSection.DISPLAY)
+            "settings_sound" -> AIAction.OpenSettings(AIAction.SettingsSection.SOUND)
+            "settings_battery" -> AIAction.OpenSettings(AIAction.SettingsSection.BATTERY)
             else -> null
         }
     }
@@ -762,21 +1062,194 @@ Focus on device actions that would be helpful based on the current context.
             "camera", "photo" -> Suggestion.SuggestionIcon.CAMERA
             "video" -> Suggestion.SuggestionIcon.VIDEO
             "music", "media", "play" -> Suggestion.SuggestionIcon.MUSIC
-            "settings", "settings_wifi", "settings_bluetooth", "settings_display", 
-            "settings_sound", "settings_battery" -> Suggestion.SuggestionIcon.SETTINGS
+            "settings",
+            "settings_wifi",
+            "settings_bluetooth",
+            "settings_display",
+            "settings_sound",
+            "settings_battery" -> Suggestion.SuggestionIcon.SETTINGS
             "url", "web", "browser" -> Suggestion.SuggestionIcon.WEB
             else -> Suggestion.SuggestionIcon.LIGHTBULB
         }
     }
 
-    /** Generate smart suggestions based on screen analysis - DEVICE INTENT ACTIONS ONLY */
+    /** Generate smart suggestions based on screen analysis - context-aware device actions */
     private fun generateSmartSuggestions(
             screenState: ScreenState,
             screenContext: String,
             maxSuggestions: Int
     ): List<Suggestion> {
-        // Only return device intent action suggestions
-        return generateDeviceActionSuggestions(maxSuggestions)
+        val contextLower = screenContext.lowercase()
+        val packageName = screenState.packageName?.lowercase() ?: ""
+        val suggestions = mutableListOf<Suggestion>()
+
+        // Detect context and add relevant suggestions first
+        val isCalendarContext =
+                packageName.contains("calendar") ||
+                        contextLower.contains("event") ||
+                        contextLower.contains("schedule") ||
+                        contextLower.contains("meeting") ||
+                        contextLower.contains("appointment")
+
+        val isPhoneContext =
+                packageName.contains("dialer") ||
+                        packageName.contains("phone") ||
+                        contextLower.contains("call") ||
+                        contextLower.contains("phone number") ||
+                        contextLower.contains("contact")
+
+        val isMessagingContext =
+                packageName.contains("message") ||
+                        packageName.contains("sms") ||
+                        contextLower.contains("text") ||
+                        contextLower.contains("message") ||
+                        contextLower.contains("chat")
+
+        val isEmailContext =
+                packageName.contains("mail") ||
+                        packageName.contains("gmail") ||
+                        contextLower.contains("email") ||
+                        contextLower.contains("inbox") ||
+                        contextLower.contains("compose")
+
+        val isMapContext =
+                packageName.contains("map") ||
+                        packageName.contains("navigation") ||
+                        contextLower.contains("direction") ||
+                        contextLower.contains("location") ||
+                        contextLower.contains("address") ||
+                        contextLower.contains("navigate")
+
+        val isBrowserContext =
+                packageName.contains("browser") ||
+                        packageName.contains("chrome") ||
+                        contextLower.contains("search") ||
+                        contextLower.contains("url") ||
+                        contextLower.contains("website")
+
+        val isMediaContext =
+                packageName.contains("music") ||
+                        packageName.contains("spotify") ||
+                        packageName.contains("youtube") ||
+                        contextLower.contains("play") ||
+                        contextLower.contains("song") ||
+                        contextLower.contains("video")
+
+        val isCameraContext =
+                packageName.contains("camera") ||
+                        contextLower.contains("photo") ||
+                        contextLower.contains("picture") ||
+                        contextLower.contains("capture")
+
+        val isSettingsContext =
+                packageName.contains("settings") ||
+                        contextLower.contains("wifi") ||
+                        contextLower.contains("bluetooth") ||
+                        contextLower.contains("brightness") ||
+                        contextLower.contains("battery")
+
+        // Add context-relevant suggestions first
+        if (isCalendarContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "📅 Create Event",
+                            "Add new calendar event",
+                            Suggestion.SuggestionIcon.CALENDAR,
+                            AIAction.OpenCalendar()
+                    )
+            )
+        }
+        if (isPhoneContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "📞 Make a Call",
+                            "Open dialer",
+                            Suggestion.SuggestionIcon.PHONE,
+                            AIAction.DialNumber("")
+                    )
+            )
+        }
+        if (isMessagingContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "💬 Send Message",
+                            "Compose a text",
+                            Suggestion.SuggestionIcon.SMS,
+                            AIAction.SendSMS("", "")
+                    )
+            )
+        }
+        if (isEmailContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "✉️ Compose Email",
+                            "Write new email",
+                            Suggestion.SuggestionIcon.EMAIL,
+                            AIAction.SendEmail("", null, null)
+                    )
+            )
+        }
+        if (isMapContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "🧭 Get Directions",
+                            "Start navigation",
+                            Suggestion.SuggestionIcon.MAP,
+                            AIAction.OpenMaps(navigate = true)
+                    )
+            )
+        }
+        if (isBrowserContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "🔍 Web Search",
+                            "Search the internet",
+                            Suggestion.SuggestionIcon.SEARCH,
+                            AIAction.WebSearch("")
+                    )
+            )
+        }
+        if (isMediaContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "🎵 Play Music",
+                            "Play some tunes",
+                            Suggestion.SuggestionIcon.MUSIC,
+                            AIAction.PlayMedia("")
+                    )
+            )
+        }
+        if (isCameraContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "📷 Take Photo",
+                            "Capture a moment",
+                            Suggestion.SuggestionIcon.CAMERA,
+                            AIAction.CaptureMedia(video = false)
+                    )
+            )
+        }
+        if (isSettingsContext) {
+            suggestions.add(
+                    createSuggestion(
+                            "⚙️ Open Settings",
+                            "Configure device",
+                            Suggestion.SuggestionIcon.SETTINGS,
+                            AIAction.OpenSettings()
+                    )
+            )
+        }
+
+        // Fill remaining slots with general suggestions
+        val allSuggestions = generateDeviceActionSuggestions(20)
+        for (suggestion in allSuggestions) {
+            if (suggestions.size >= maxSuggestions) break
+            if (suggestions.none { it.title == suggestion.title }) {
+                suggestions.add(suggestion)
+            }
+        }
+
+        return suggestions.take(maxSuggestions)
     }
 
     /**
@@ -1132,7 +1605,7 @@ Focus on device actions that would be helpful based on the current context.
 
             // Help
             lowerMessage.contains("help") || lowerMessage.contains("what can you") -> {
-                """{"thought":"User needs help","response":"I'm Omni, your on-device AI assistant! I can:\n\n• **See** what's on your screen\n• **Click** buttons and links\n• **Type** text in fields\n• **Scroll** through content\n• **Open apps** - try: Settings, Chrome, Messages, Phone, Camera, Clock\n• **Navigate** - go back, go home\n• **Remember** things you tell me\n\n📱 **Device Actions:**\n• \"open calendar\" / \"create event\"\n• \"call 555-1234\" / \"text John hello\"\n• \"set alarm for 7am\" / \"set timer 5 minutes\"\n• \"search for weather\" / \"open google.com\"\n• \"navigate to coffee shop\" / \"show maps\"\n• \"send email to user@mail.com\"\n• \"share this text\" / \"copy hello\"\n• \"take a photo\" / \"record video\"\n• \"open wifi settings\" / \"open bluetooth settings\"\n\nTry saying:\n• \"open settings\"\n• \"what's on my screen?\"\n• \"call mom\"\n• \"set alarm for 8am\"","actions":[],"complete":true}"""
+                """{"thought":"User needs help","response":"I'm Omni, your on-device AI assistant! I can:\n\n• **See** what's on your screen\n• **Click** buttons and links\n• **Type** text in fields\n• **Scroll** through content\n• **Open apps** - try: Settings, Chrome, Messages, Phone, Camera, Clock\n• **Navigate** - go back, go home\n• **Remember** things you tell me\n\n📱 **Device Actions:**\n• \"open calendar\" / \"create event\"\n• \"call 555-1234\" / \"send text to 555-1234\"\n• \"set alarm for 7am\" / \"set timer 5 minutes\"\n• \"search for weather\" / \"open google.com\"\n• \"navigate to coffee shop\" / \"show maps\"\n• \"send email to user@mail.com\"\n• \"share this text\" / \"copy hello\"\n• \"take a photo\" / \"record video\"\n• \"open wifi settings\" / \"open bluetooth settings\"\n\nTry saying:\n• \"open settings\"\n• \"what's on my screen?\"\n• \"set alarm for 8am\"","actions":[],"complete":true}"""
             }
 
             // Calculator - might not be on emulator
@@ -1816,5 +2289,116 @@ Focus on device actions that would be helpful based on the current context.
 
         // Return as-is if it's not JSON
         return trimmed
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STREAMING SUGGESTION GENERATION
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Generate suggestions with streaming output so users can see AI thinking in real-time. Uses
+     * the onToken callback from Cactus SDK to emit tokens as they're generated.
+     */
+    override fun generateSuggestionsStreaming(
+            screenState: ScreenState,
+            maxSuggestions: Int
+    ): kotlinx.coroutines.flow.Flow<SuggestionStreamEvent> = callbackFlow {
+        try {
+            if (!isModelLoaded) {
+                trySend(SuggestionStreamEvent.Error("Model not loaded. Call loadModel() first."))
+                close()
+                return@callbackFlow
+            }
+
+            val screenContext = screenState.toPromptContext()
+            Log.d(TAG, "Starting streaming suggestion generation for: ${screenState.packageName}")
+
+            DebugLogManager.info(
+                    TAG,
+                    "Starting streaming suggestion generation",
+                    "App: ${screenState.packageName}\nMax suggestions: $maxSuggestions"
+            )
+
+            if (!cactusAvailable || cactusLM == null) {
+                // Fallback to non-streaming for smart suggestions
+                DebugLogManager.info(TAG, "AI not available, using fallback")
+                val suggestions =
+                        generateSmartSuggestions(screenState, screenContext, maxSuggestions)
+                trySend(SuggestionStreamEvent.Complete(suggestions))
+                close()
+                return@callbackFlow
+            }
+
+            // Build the prompt
+            val suggestionPrompt = buildStreamingPrompt(screenContext, maxSuggestions)
+
+            DebugLogManager.prompt(
+                    TAG,
+                    "Streaming AI prompt for suggestions",
+                    "Prompt length: ${suggestionPrompt.length} chars"
+            )
+
+            val cactusMessages =
+                    listOf(CactusChatMessage(content = suggestionPrompt, role = "user"))
+            val fullResponse = StringBuilder()
+
+            // Generate completion with streaming via onToken callback
+            val result =
+                    cactusLM!!.generateCompletion(
+                            messages = cactusMessages,
+                            params = CactusCompletionParams(maxTokens = 400, temperature = 0.1),
+                            onToken = { token, _ ->
+                                fullResponse.append(token)
+                                // Emit each token so UI can show progress
+                                trySend(SuggestionStreamEvent.Token(token, fullResponse.toString()))
+                            }
+                    )
+
+            val responseContent = result?.response ?: fullResponse.toString()
+            DebugLogManager.response(TAG, "Streaming complete", "Response:\n$responseContent")
+
+            // Parse the final response into suggestions
+            val suggestions =
+                    if (responseContent.isNotBlank()) {
+                        val cleanedResponse = cleanAIResponse(responseContent)
+                        val parsed = parseSuggestionsFromAI(cleanedResponse, screenState)
+                        if (parsed.isNotEmpty()) {
+                            parsed
+                        } else {
+                            generateContextAwareFallback(screenState, screenContext, maxSuggestions)
+                        }
+                    } else {
+                        generateSmartSuggestions(screenState, screenContext, maxSuggestions)
+                    }
+
+            trySend(SuggestionStreamEvent.Complete(suggestions))
+            close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Streaming suggestion generation failed", e)
+            DebugLogManager.error(TAG, "Streaming failed", e.message ?: "Unknown error")
+            trySend(SuggestionStreamEvent.Error(e.message ?: "Streaming failed"))
+            close()
+        }
+
+        awaitClose {}
+    }
+
+    /** Build the prompt for streaming suggestions */
+    private fun buildStreamingPrompt(screenContext: String, maxSuggestions: Int): String {
+        return """You are a mobile assistant. Based on the screen below, suggest $maxSuggestions helpful actions.
+
+SCREEN:
+$screenContext
+
+Return ONLY a JSON array. Each object must have these exact fields:
+- "title": short action name with emoji (e.g. "📞 Call number")
+- "description": one sentence explanation
+- "type": one of: dial, sms, search, maps, calendar, alarm, timer, email, camera, copy, share, settings_wifi, settings_bluetooth
+- "value": the target (phone number, search query, address, etc.)
+
+Example response format:
+[{"title":"📞 Call 07483225245","description":"Dial this phone number","type":"dial","value":"07483225245"}]
+
+JSON array:"""
     }
 }
