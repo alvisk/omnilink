@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">Omni</string>
+    <string name="accessibility_service_description">Omni is your on-device AI assistant that can
+        see and control any app. All AI processing happens locally - your data never leaves your
+        phone. Grant this permission to enable screen reading and automated actions.</string>
+</resources>

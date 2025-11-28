@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- OMNI Black & Red Theme -->
+    <color name="omni_red">#FFFF0000</color>
+    <color name="omni_red_bright">#FFFF3333</color>
+    <color name="omni_red_dark">#FFCC0000</color>
+    <color name="omni_red_muted">#FF990000</color>
+
+    <color name="omni_black">#FF000000</color>
+    <color name="omni_black_soft">#FF0D0D0D</color>
+    <color name="omni_gray_dark">#FF1A1A1A</color>
+    <color name="omni_gray_mid">#FF2A2A2A</color>
+    <color name="omni_gray_light">#FF444444</color>
+    <color name="omni_gray_text">#FF888888</color>
+    <color name="omni_white">#FFFFFFFF</color>
+
+    <color name="omni_green">#FF00FF00</color>
+    <color name="omni_yellow">#FFFFFF00</color>
+
+    <!-- Legacy -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
