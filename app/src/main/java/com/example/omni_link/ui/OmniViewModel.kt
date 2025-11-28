@@ -16,6 +16,7 @@ import com.example.omni_link.data.Suggestion
 import com.example.omni_link.data.SuggestionState
 import com.example.omni_link.data.db.MemoryRepository
 import com.example.omni_link.data.db.OmniLinkDatabase
+import com.example.omni_link.debug.DebugLogManager
 import com.example.omni_link.service.OmniAccessibilityService
 import java.util.UUID
 import kotlinx.coroutines.delay
@@ -521,6 +522,26 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             is AIAction.Home -> "Going home..."
             is AIAction.OpenApp -> "Opening ${action.appName}..."
             is AIAction.Wait -> "Waiting..."
+            // Device Intent Actions
+            is AIAction.OpenCalendar ->
+                    if (action.title != null) "Creating event '${action.title}'..."
+                    else "Opening calendar..."
+            is AIAction.DialNumber -> "Opening dialer..."
+            is AIAction.CallNumber -> "Calling ${action.phoneNumber}..."
+            is AIAction.SendSMS -> "Composing SMS..."
+            is AIAction.OpenURL -> "Opening URL..."
+            is AIAction.WebSearch -> "Searching the web..."
+            is AIAction.SetAlarm -> "Setting alarm..."
+            is AIAction.SetTimer -> "Setting timer..."
+            is AIAction.ShareText -> "Opening share..."
+            is AIAction.CopyToClipboard -> "Copying to clipboard..."
+            is AIAction.SendEmail -> "Composing email..."
+            is AIAction.OpenMaps ->
+                    if (action.navigate) "Starting navigation..." else "Opening maps..."
+            is AIAction.PlayMedia -> "Playing media..."
+            is AIAction.CaptureMedia ->
+                    if (action.video) "Opening video camera..." else "Opening camera..."
+            is AIAction.OpenSettings -> "Opening ${action.section.name.lowercase()} settings..."
             else -> "Processing..."
         }
     }
@@ -658,6 +679,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Show the suggestions panel */
     fun showSuggestions() {
+        DebugLogManager.info(TAG, "Showing suggestions panel", "Triggered by floating button click")
         _suggestionState.update { it.copy(isVisible = true) }
         generateSuggestions()
     }
@@ -694,6 +716,30 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     /** Check if floating overlay is enabled */
     fun isFloatingOverlayEnabled(): Boolean {
         return OmniAccessibilityService.instance?.isFloatingOverlayEnabled() ?: false
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DEBUG OVERLAY METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Enable debug overlay button */
+    fun enableDebugOverlay() {
+        OmniAccessibilityService.instance?.showDebugButton()
+    }
+
+    /** Disable debug overlay button */
+    fun disableDebugOverlay() {
+        OmniAccessibilityService.instance?.hideDebugButton()
+    }
+
+    /** Toggle debug overlay button */
+    fun toggleDebugOverlay() {
+        OmniAccessibilityService.instance?.toggleDebugButton()
+    }
+
+    /** Check if debug overlay is enabled */
+    fun isDebugOverlayEnabled(): Boolean {
+        return OmniAccessibilityService.instance?.isDebugOverlayEnabled() ?: false
     }
 
     override fun onCleared() {

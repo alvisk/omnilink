@@ -21,15 +21,27 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // 🚀 PERFORMANCE: Target arm64-v8a for Nothing Phone 3 (Snapdragon 8s Gen 3)
+        // This enables NEON SIMD instructions and removes unnecessary x86/arm-v7 code
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // 🚀 PERFORMANCE: Enable optimizations for hackathon demo
+            isMinifyEnabled = true  // Shrink & optimize bytecode
+            isShrinkResources = true // Remove unused resources
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        // Fast debug builds for development
+        debug {
+            isMinifyEnabled = false
         }
     }
 
@@ -73,7 +85,7 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     // 🌵 Cactus SDK - On-device LLM inference
-    implementation("com.cactuscompute:cactus:1.0.2-beta")
+    implementation("com.cactuscompute:cactus:1.2.0-beta")
 
     // Room for persistent memory (Track 1: Memory Master)
     implementation(libs.room.runtime)

@@ -54,6 +54,7 @@ fun ChatScreen(viewModel: OmniViewModel = viewModel()) {
     var showPermissionSheet by remember { mutableStateOf(false) }
     var showModelSettings by remember { mutableStateOf(false) }
     var isOverlayEnabled by remember { mutableStateOf(viewModel.isFloatingOverlayEnabled()) }
+    var isDebugEnabled by remember { mutableStateOf(viewModel.isDebugOverlayEnabled()) }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -75,11 +76,16 @@ fun ChatScreen(viewModel: OmniViewModel = viewModel()) {
                             uiState = uiState,
                             isServiceRunning = isServiceRunning,
                             isOverlayEnabled = isOverlayEnabled,
+                            isDebugEnabled = isDebugEnabled,
                             onSettingsClick = { showPermissionSheet = true },
                             onModelSettingsClick = { showModelSettings = true },
                             onOverlayToggle = {
                                 viewModel.toggleFloatingOverlay()
                                 isOverlayEnabled = viewModel.isFloatingOverlayEnabled()
+                            },
+                            onDebugToggle = {
+                                viewModel.toggleDebugOverlay()
+                                isDebugEnabled = viewModel.isDebugOverlayEnabled()
                             },
                             onCopyAllClick = {
                                 if (messages.isNotEmpty()) {
@@ -187,9 +193,11 @@ fun BlockyTopBar(
         uiState: OmniUiState,
         isServiceRunning: Boolean,
         isOverlayEnabled: Boolean = false,
+        isDebugEnabled: Boolean = false,
         onSettingsClick: () -> Unit,
         onModelSettingsClick: () -> Unit = {},
         onOverlayToggle: () -> Unit = {},
+        onDebugToggle: () -> Unit = {},
         onCopyAllClick: () -> Unit = {},
         hasMessages: Boolean = false
 ) {
@@ -268,6 +276,28 @@ fun BlockyTopBar(
                         imageVector = Icons.Outlined.Layers,
                         contentDescription =
                                 if (isOverlayEnabled) "Disable Overlay" else "Enable Overlay",
+                        tint = if (isServiceRunning) OmniWhite else OmniGrayText
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Debug overlay toggle button
+            IconButton(
+                    onClick = onDebugToggle,
+                    enabled = isServiceRunning,
+                    modifier =
+                            Modifier.size(40.dp)
+                                    .background(
+                                            if (isDebugEnabled) OmniGreen
+                                            else if (isServiceRunning) OmniGrayDark
+                                            else OmniGrayDark.copy(alpha = 0.5f)
+                                    )
+            ) {
+                Icon(
+                        imageVector = Icons.Outlined.BugReport,
+                        contentDescription =
+                                if (isDebugEnabled) "Disable Debug" else "Enable Debug",
                         tint = if (isServiceRunning) OmniWhite else OmniGrayText
                 )
             }

@@ -2,12 +2,21 @@ package com.example.omni_link.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.SearchManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.AlarmClock
+import android.provider.CalendarContract
+import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
@@ -31,6 +40,9 @@ import com.example.omni_link.data.ScreenElement
 import com.example.omni_link.data.ScreenState
 import com.example.omni_link.data.Suggestion
 import com.example.omni_link.data.SuggestionState
+import com.example.omni_link.debug.DebugLogManager
+import com.example.omni_link.ui.DebugFloatingButton
+import com.example.omni_link.ui.DebugOverlayPanel
 import com.example.omni_link.ui.OmniFloatingButton
 import com.example.omni_link.ui.OmniOverlay
 import kotlinx.coroutines.*
@@ -73,12 +85,17 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
     private var windowManager: WindowManager? = null
     private var overlayView: FrameLayout? = null
     private var floatingButtonView: FrameLayout? = null
+    private var debugButtonView: FrameLayout? = null
+    private var debugOverlayView: FrameLayout? = null
 
     // Debounce job for screen capture - cancel previous job when new event arrives
     private var screenCaptureJob: Job? = null
 
     // Track if floating overlay is enabled
     private var isFloatingOverlayEnabled = false
+
+    // Track if debug overlay is enabled
+    private var isDebugOverlayEnabled = false
 
     // Lifecycle management for Compose
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -128,6 +145,12 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
 
+        // Skip events from our own app to prevent feedback loops with overlays
+        val eventPackage = event.packageName?.toString() ?: ""
+        if (eventPackage.contains("omni_link")) {
+            return
+        }
+
         // Capture screen on significant UI changes
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
@@ -168,7 +191,18 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                 )
 
         _screenState.value = state
-        Log.d(TAG, "Captured ${state.flattenElements().size} elements from $packageName")
+        val elementCount = state.flattenElements().size
+        Log.d(TAG, "Captured $elementCount elements from $packageName")
+
+        // Skip debug logging for our own app to prevent feedback loop
+        // (debug overlay updates trigger accessibility events which would cause infinite loop)
+        if (!packageName.contains("omni_link")) {
+            DebugLogManager.debug(
+                    TAG,
+                    "Screen captured: $packageName",
+                    "Elements: $elementCount\n" + "Activity: ${activityName ?: "unknown"}"
+            )
+        }
 
         return state
     }
@@ -218,21 +252,51 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
     suspend fun executeAction(action: AIAction): ActionResult {
         Log.d(TAG, "Executing action: $action")
 
-        return when (action) {
-            is AIAction.Click -> executeClick(action)
-            is AIAction.Type -> executeType(action)
-            is AIAction.Scroll -> executeScroll(action)
-            is AIAction.Back -> executeBack()
-            is AIAction.Home -> executeHome()
-            is AIAction.OpenApp -> executeOpenApp(action)
-            is AIAction.Wait -> {
-                delay(action.milliseconds)
-                ActionResult.Success("Waited ${action.milliseconds}ms")
-            }
-            is AIAction.Respond -> ActionResult.Success(action.message)
-            is AIAction.Clarify -> ActionResult.Success(action.question)
-            is AIAction.Complete -> ActionResult.Success(action.summary)
+        DebugLogManager.action(TAG, "Executing: ${action.javaClass.simpleName}", action.toString())
+
+        val result =
+                when (action) {
+                    is AIAction.Click -> executeClick(action)
+                    is AIAction.Type -> executeType(action)
+                    is AIAction.Scroll -> executeScroll(action)
+                    is AIAction.Back -> executeBack()
+                    is AIAction.Home -> executeHome()
+                    is AIAction.OpenApp -> executeOpenApp(action)
+                    is AIAction.Wait -> {
+                        delay(action.milliseconds)
+                        ActionResult.Success("Waited ${action.milliseconds}ms")
+                    }
+                    is AIAction.Respond -> ActionResult.Success(action.message)
+                    is AIAction.Clarify -> ActionResult.Success(action.question)
+                    is AIAction.Complete -> ActionResult.Success(action.summary)
+                    // Device Intent Actions
+                    is AIAction.OpenCalendar -> executeOpenCalendar(action)
+                    is AIAction.DialNumber -> executeDialNumber(action)
+                    is AIAction.CallNumber -> executeCallNumber(action)
+                    is AIAction.SendSMS -> executeSendSMS(action)
+                    is AIAction.OpenURL -> executeOpenURL(action)
+                    is AIAction.WebSearch -> executeWebSearch(action)
+                    is AIAction.SetAlarm -> executeSetAlarm(action)
+                    is AIAction.SetTimer -> executeSetTimer(action)
+                    is AIAction.ShareText -> executeShareText(action)
+                    is AIAction.CopyToClipboard -> executeCopyToClipboard(action)
+                    is AIAction.SendEmail -> executeSendEmail(action)
+                    is AIAction.OpenMaps -> executeOpenMaps(action)
+                    is AIAction.PlayMedia -> executePlayMedia(action)
+                    is AIAction.CaptureMedia -> executeCaptureMedia(action)
+                    is AIAction.OpenSettings -> executeOpenSettings(action)
+                }
+
+        // Log result
+        when (result) {
+            is ActionResult.Success ->
+                    DebugLogManager.success(TAG, "Action succeeded", result.description)
+            is ActionResult.Failure -> DebugLogManager.error(TAG, "Action failed", result.reason)
+            is ActionResult.NeedsConfirmation ->
+                    DebugLogManager.info(TAG, "Action needs confirmation", result.reason)
         }
+
+        return result
     }
 
     /** Click on an element by label or index */
@@ -578,6 +642,353 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         )
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DEVICE INTENT ACTION IMPLEMENTATIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Open calendar, optionally creating an event */
+    private fun executeOpenCalendar(action: AIAction.OpenCalendar): ActionResult {
+        return try {
+            val intent =
+                    if (action.title != null) {
+                        // Create a new calendar event
+                        Intent(Intent.ACTION_INSERT).apply {
+                            data = CalendarContract.Events.CONTENT_URI
+                            putExtra(CalendarContract.Events.TITLE, action.title)
+                            action.description?.let {
+                                putExtra(CalendarContract.Events.DESCRIPTION, it)
+                            }
+                            action.location?.let {
+                                putExtra(CalendarContract.Events.EVENT_LOCATION, it)
+                            }
+                            action.startTime?.let {
+                                putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, it)
+                            }
+                            action.endTime?.let {
+                                putExtra(CalendarContract.EXTRA_EVENT_END_TIME, it)
+                            }
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                    } else {
+                        // Just open calendar
+                        Intent(Intent.ACTION_VIEW).apply {
+                            data =
+                                    CalendarContract.CONTENT_URI
+                                            .buildUpon()
+                                            .appendPath("time")
+                                            .appendPath(
+                                                    (action.startTime ?: System.currentTimeMillis())
+                                                            .toString()
+                                            )
+                                            .build()
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                    }
+            startActivity(intent)
+            if (action.title != null) {
+                ActionResult.Success("Creating calendar event: ${action.title}")
+            } else {
+                ActionResult.Success("Opened calendar")
+            }
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to open calendar: ${e.message}")
+        }
+    }
+
+    /** Open the dialer with a phone number (user must tap call) */
+    private fun executeDialNumber(action: AIAction.DialNumber): ActionResult {
+        return try {
+            val intent =
+                    Intent(Intent.ACTION_DIAL).apply {
+                        data = Uri.parse("tel:${action.phoneNumber}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            ActionResult.Success("Opened dialer with ${action.phoneNumber}")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to open dialer: ${e.message}")
+        }
+    }
+
+    /** Directly call a phone number (requires CALL_PHONE permission) */
+    private fun executeCallNumber(action: AIAction.CallNumber): ActionResult {
+        return try {
+            val intent =
+                    Intent(Intent.ACTION_CALL).apply {
+                        data = Uri.parse("tel:${action.phoneNumber}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            ActionResult.Success("Calling ${action.phoneNumber}")
+        } catch (e: SecurityException) {
+            // Fallback to dial if CALL_PHONE permission not granted
+            executeDialNumber(AIAction.DialNumber(action.phoneNumber))
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to make call: ${e.message}")
+        }
+    }
+
+    /** Compose an SMS message */
+    private fun executeSendSMS(action: AIAction.SendSMS): ActionResult {
+        return try {
+            val intent =
+                    Intent(Intent.ACTION_SENDTO).apply {
+                        data = Uri.parse("smsto:${action.phoneNumber}")
+                        putExtra("sms_body", action.message)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            ActionResult.Success("Composing SMS to ${action.phoneNumber}")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to compose SMS: ${e.message}")
+        }
+    }
+
+    /** Open a URL in the browser */
+    private fun executeOpenURL(action: AIAction.OpenURL): ActionResult {
+        return try {
+            var url = action.url
+            if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                url = "https://$url"
+            }
+            val intent =
+                    Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse(url)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            ActionResult.Success("Opening $url")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to open URL: ${e.message}")
+        }
+    }
+
+    /** Search the web */
+    private fun executeWebSearch(action: AIAction.WebSearch): ActionResult {
+        return try {
+            val intent =
+                    Intent(Intent.ACTION_WEB_SEARCH).apply {
+                        putExtra(SearchManager.QUERY, action.query)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            ActionResult.Success("Searching for: ${action.query}")
+        } catch (e: Exception) {
+            // Fallback to browser with Google search
+            try {
+                val searchUrl = "https://www.google.com/search?q=${Uri.encode(action.query)}"
+                executeOpenURL(AIAction.OpenURL(searchUrl))
+            } catch (e2: Exception) {
+                ActionResult.Failure("Failed to search: ${e.message}")
+            }
+        }
+    }
+
+    /** Set an alarm */
+    private fun executeSetAlarm(action: AIAction.SetAlarm): ActionResult {
+        return try {
+            val intent =
+                    Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                        putExtra(AlarmClock.EXTRA_HOUR, action.hour)
+                        putExtra(AlarmClock.EXTRA_MINUTES, action.minute)
+                        putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+                        action.message?.let { putExtra(AlarmClock.EXTRA_MESSAGE, it) }
+                        action.days?.let { putExtra(AlarmClock.EXTRA_DAYS, ArrayList(it)) }
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            val timeStr = String.format("%02d:%02d", action.hour, action.minute)
+            ActionResult.Success("Setting alarm for $timeStr")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to set alarm: ${e.message}")
+        }
+    }
+
+    /** Set a timer */
+    private fun executeSetTimer(action: AIAction.SetTimer): ActionResult {
+        return try {
+            val intent =
+                    Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                        putExtra(AlarmClock.EXTRA_LENGTH, action.seconds)
+                        putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+                        action.message?.let { putExtra(AlarmClock.EXTRA_MESSAGE, it) }
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            val minutes = action.seconds / 60
+            val secs = action.seconds % 60
+            ActionResult.Success("Setting timer for ${minutes}m ${secs}s")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to set timer: ${e.message}")
+        }
+    }
+
+    /** Share text via share sheet */
+    private fun executeShareText(action: AIAction.ShareText): ActionResult {
+        return try {
+            val intent =
+                    Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, action.text)
+                        action.subject?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
+                    }
+            val chooser =
+                    Intent.createChooser(intent, "Share via").apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(chooser)
+            ActionResult.Success("Opening share dialog")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to share: ${e.message}")
+        }
+    }
+
+    /** Copy text to clipboard */
+    private fun executeCopyToClipboard(action: AIAction.CopyToClipboard): ActionResult {
+        return try {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText(action.label, action.text)
+            clipboard.setPrimaryClip(clip)
+            ActionResult.Success(
+                    "Copied to clipboard: ${action.text.take(50)}${if (action.text.length > 50) "..." else ""}"
+            )
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to copy to clipboard: ${e.message}")
+        }
+    }
+
+    /** Compose an email */
+    private fun executeSendEmail(action: AIAction.SendEmail): ActionResult {
+        return try {
+            val intent =
+                    Intent(Intent.ACTION_SENDTO).apply {
+                        data = Uri.parse("mailto:${action.to}")
+                        action.subject?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
+                        action.body?.let { putExtra(Intent.EXTRA_TEXT, it) }
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            ActionResult.Success("Composing email to ${action.to}")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to compose email: ${e.message}")
+        }
+    }
+
+    /** Open maps or navigate to a location */
+    private fun executeOpenMaps(action: AIAction.OpenMaps): ActionResult {
+        return try {
+            val uri =
+                    when {
+                        action.navigate && action.query != null -> {
+                            Uri.parse("google.navigation:q=${Uri.encode(action.query)}")
+                        }
+                        action.navigate && action.latitude != null && action.longitude != null -> {
+                            Uri.parse("google.navigation:q=${action.latitude},${action.longitude}")
+                        }
+                        action.query != null -> {
+                            Uri.parse("geo:0,0?q=${Uri.encode(action.query)}")
+                        }
+                        action.latitude != null && action.longitude != null -> {
+                            Uri.parse("geo:${action.latitude},${action.longitude}")
+                        }
+                        else -> {
+                            Uri.parse("geo:0,0")
+                        }
+                    }
+            val intent =
+                    Intent(Intent.ACTION_VIEW, uri).apply {
+                        setPackage("com.google.android.apps.maps")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            // Try Google Maps first, fall back to any maps app
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                intent.setPackage(null)
+                startActivity(intent)
+            }
+            if (action.navigate) {
+                ActionResult.Success(
+                        "Starting navigation to ${action.query ?: "${action.latitude},${action.longitude}"}"
+                )
+            } else {
+                ActionResult.Success(
+                        "Opening maps: ${action.query ?: "${action.latitude},${action.longitude}"}"
+                )
+            }
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to open maps: ${e.message}")
+        }
+    }
+
+    /** Play media */
+    private fun executePlayMedia(action: AIAction.PlayMedia): ActionResult {
+        return try {
+            val intent =
+                    Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
+                        putExtra(
+                                MediaStore.EXTRA_MEDIA_FOCUS,
+                                MediaStore.Audio.Media.ENTRY_CONTENT_TYPE
+                        )
+                        putExtra(SearchManager.QUERY, action.query)
+                        action.artist?.let { putExtra(MediaStore.EXTRA_MEDIA_ARTIST, it) }
+                        action.album?.let { putExtra(MediaStore.EXTRA_MEDIA_ALBUM, it) }
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+            ActionResult.Success("Playing: ${action.query}")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to play media: ${e.message}")
+        }
+    }
+
+    /** Capture photo or video */
+    private fun executeCaptureMedia(action: AIAction.CaptureMedia): ActionResult {
+        return try {
+            val intent =
+                    if (action.video) {
+                        Intent(MediaStore.ACTION_VIDEO_CAPTURE)
+                    } else {
+                        Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                    }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            ActionResult.Success(if (action.video) "Opening video camera" else "Opening camera")
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to open camera: ${e.message}")
+        }
+    }
+
+    /** Open settings to a specific section */
+    private fun executeOpenSettings(action: AIAction.OpenSettings): ActionResult {
+        return try {
+            val settingsAction =
+                    when (action.section) {
+                        AIAction.SettingsSection.MAIN -> Settings.ACTION_SETTINGS
+                        AIAction.SettingsSection.WIFI -> Settings.ACTION_WIFI_SETTINGS
+                        AIAction.SettingsSection.BLUETOOTH -> Settings.ACTION_BLUETOOTH_SETTINGS
+                        AIAction.SettingsSection.DISPLAY -> Settings.ACTION_DISPLAY_SETTINGS
+                        AIAction.SettingsSection.SOUND -> Settings.ACTION_SOUND_SETTINGS
+                        AIAction.SettingsSection.BATTERY -> Intent.ACTION_POWER_USAGE_SUMMARY
+                        AIAction.SettingsSection.APPS -> Settings.ACTION_APPLICATION_SETTINGS
+                        AIAction.SettingsSection.NOTIFICATIONS ->
+                                Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                        AIAction.SettingsSection.LOCATION ->
+                                Settings.ACTION_LOCATION_SOURCE_SETTINGS
+                        AIAction.SettingsSection.SECURITY -> Settings.ACTION_SECURITY_SETTINGS
+                        AIAction.SettingsSection.ACCESSIBILITY ->
+                                Settings.ACTION_ACCESSIBILITY_SETTINGS
+                    }
+            val intent = Intent(settingsAction).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            startActivity(intent)
+            ActionResult.Success(
+                    "Opened ${action.section.name.lowercase().replace("_", " ")} settings"
+            )
+        } catch (e: Exception) {
+            ActionResult.Failure("Failed to open settings: ${e.message}")
+        }
+    }
+
     /** Add an overlay view (for floating UI) */
     fun addOverlay(composeContent: @Composable () -> Unit) {
         removeOverlay()
@@ -780,4 +1191,154 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
             showFloatingButton()
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DEBUG OVERLAY METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Show the debug floating button */
+    fun showDebugButton() {
+        if (debugButtonView != null) return
+        isDebugOverlayEnabled = true
+
+        val params =
+                WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                )
+        params.gravity = Gravity.TOP or Gravity.END
+        params.x = 24
+        params.y = 100
+
+        val container = FrameLayout(this)
+        container.setViewTreeLifecycleOwner(this)
+        container.setViewTreeSavedStateRegistryOwner(this)
+
+        val composeView =
+                ComposeView(this).apply {
+                    setContent {
+                        val debugState = DebugLogManager.state.collectAsState()
+                        val hasNewLogs = debugState.value.logs.isNotEmpty()
+
+                        DebugFloatingButton(
+                                onClick = {
+                                    Log.d(TAG, "Debug button clicked")
+                                    DebugLogManager.toggleOverlay()
+                                    if (DebugLogManager.state.value.isVisible) {
+                                        showDebugOverlay()
+                                    } else {
+                                        hideDebugOverlay()
+                                    }
+                                },
+                                hasNewLogs = hasNewLogs
+                        )
+                    }
+                }
+        container.addView(composeView)
+
+        debugButtonView = container
+        try {
+            windowManager?.addView(container, params)
+            Log.d(TAG, "Debug button overlay added")
+            DebugLogManager.info("OmniService", "Debug overlay enabled")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding debug button overlay", e)
+            debugButtonView = null
+        }
+    }
+
+    /** Hide the debug floating button */
+    fun hideDebugButton() {
+        isDebugOverlayEnabled = false
+        debugButtonView?.let {
+            try {
+                windowManager?.removeView(it)
+                Log.d(TAG, "Debug button overlay removed")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing debug button overlay", e)
+            }
+        }
+        debugButtonView = null
+        hideDebugOverlay()
+    }
+
+    /** Toggle debug button visibility */
+    fun toggleDebugButton() {
+        if (debugButtonView != null) {
+            hideDebugButton()
+        } else {
+            showDebugButton()
+        }
+    }
+
+    /** Show the debug overlay panel */
+    fun showDebugOverlay() {
+        hideDebugOverlayOnly()
+
+        val params =
+                WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                )
+        params.gravity = Gravity.TOP
+
+        val container = FrameLayout(this)
+        container.setViewTreeLifecycleOwner(this)
+        container.setViewTreeSavedStateRegistryOwner(this)
+
+        val composeView =
+                ComposeView(this).apply {
+                    setContent {
+                        val debugState = DebugLogManager.state.collectAsState()
+
+                        DebugOverlayPanel(
+                                state = debugState.value,
+                                onDismiss = {
+                                    DebugLogManager.hideOverlay()
+                                    hideDebugOverlay()
+                                },
+                                onClear = { DebugLogManager.clearLogs() },
+                                onToggleExpand = { DebugLogManager.toggleExpanded() }
+                        )
+                    }
+                }
+        container.addView(composeView)
+
+        debugOverlayView = container
+        try {
+            windowManager?.addView(container, params)
+            Log.d(TAG, "Debug overlay panel added")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding debug overlay panel", e)
+            debugOverlayView = null
+        }
+    }
+
+    /** Hide only the debug overlay panel (not the button) */
+    private fun hideDebugOverlayOnly() {
+        debugOverlayView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing debug overlay panel", e)
+            }
+        }
+        debugOverlayView = null
+    }
+
+    /** Hide the debug overlay panel */
+    fun hideDebugOverlay() {
+        hideDebugOverlayOnly()
+    }
+
+    /** Check if debug overlay is enabled */
+    fun isDebugOverlayEnabled(): Boolean = isDebugOverlayEnabled
 }

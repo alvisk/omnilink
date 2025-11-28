@@ -457,6 +457,18 @@ private fun getSuggestionIcon(icon: Suggestion.SuggestionIcon): ImageVector {
         Suggestion.SuggestionIcon.SHARE -> Icons.Outlined.Share
         Suggestion.SuggestionIcon.COPY -> Icons.Outlined.ContentCopy
         Suggestion.SuggestionIcon.INFO -> Icons.Outlined.Info
+        Suggestion.SuggestionIcon.CALENDAR -> Icons.Outlined.CalendarMonth
+        Suggestion.SuggestionIcon.PHONE -> Icons.Outlined.Phone
+        Suggestion.SuggestionIcon.SMS -> Icons.Outlined.Sms
+        Suggestion.SuggestionIcon.ALARM -> Icons.Outlined.Alarm
+        Suggestion.SuggestionIcon.TIMER -> Icons.Outlined.Timer
+        Suggestion.SuggestionIcon.EMAIL -> Icons.Outlined.Email
+        Suggestion.SuggestionIcon.MAP -> Icons.Outlined.Map
+        Suggestion.SuggestionIcon.CAMERA -> Icons.Outlined.CameraAlt
+        Suggestion.SuggestionIcon.VIDEO -> Icons.Outlined.Videocam
+        Suggestion.SuggestionIcon.MUSIC -> Icons.Outlined.MusicNote
+        Suggestion.SuggestionIcon.SETTINGS -> Icons.Outlined.Settings
+        Suggestion.SuggestionIcon.WEB -> Icons.Outlined.Language
     }
 }
 

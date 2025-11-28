@@ -19,7 +19,20 @@ data class Suggestion(
         SEARCH, // Search action
         SHARE, // Share content
         COPY, // Copy text
-        INFO // Information
+        INFO, // Information
+        // Device Intent Icons
+        CALENDAR, // Calendar/events
+        PHONE, // Call/dial
+        SMS, // Text message
+        ALARM, // Alarm/timer
+        TIMER, // Timer
+        EMAIL, // Email
+        MAP, // Maps/navigation
+        CAMERA, // Camera/photo
+        VIDEO, // Video
+        MUSIC, // Play media
+        SETTINGS, // Settings
+        WEB // URL/browser
     }
 }
 
