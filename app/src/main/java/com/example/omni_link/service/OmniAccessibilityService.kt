@@ -118,6 +118,9 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         var onGenerateTextOptions: (() -> Unit)? = null
         var onTextOptionSelected: ((TextOption) -> Unit)? = null
 
+        // Text selection fast forward callback (cloud AI inference)
+        var onTextSelectionFastForward: (() -> Unit)? = null
+
         // Observable floating overlay state (for syncing with ViewModel/UI)
         private val _floatingOverlayEnabled = MutableStateFlow(false)
         val floatingOverlayEnabled: StateFlow<Boolean> = _floatingOverlayEnabled
@@ -1891,6 +1894,10 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                                 onGenerateOptions = { onGenerateTextOptions?.invoke() },
                                 onOptionSelected = { option ->
                                     onTextOptionSelected?.invoke(option)
+                                },
+                                onFastForward = {
+                                    Log.d(TAG, "⚡ Text selection fast forward clicked")
+                                    onTextSelectionFastForward?.invoke()
                                 }
                         )
                     }

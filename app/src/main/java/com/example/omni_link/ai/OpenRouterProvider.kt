@@ -389,6 +389,160 @@ Respond with ONLY the JSON array, no markdown, no explanation:"""
     /** Get the last error for debugging */
     fun getLastError(): String? = lastError
 
+    /**
+     * Generate text options using OpenRouter cloud for OCR text selection.
+     * This provides fast cloud-based option generation for the Circle-to-Search feature.
+     */
+    fun generateTextOptionsStreaming(
+            selectedText: String,
+            maxOptions: Int = 6
+    ): Flow<TextOptionStreamEvent> = callbackFlow {
+        try {
+            val apiKey = getApiKey()
+            if (apiKey == null) {
+                trySend(TextOptionStreamEvent.Error("OpenRouter API key not configured"))
+                close()
+                return@callbackFlow
+            }
+
+            Log.d(TAG, "⚡ OpenRouter: Generating text options with ${currentModel.displayName}")
+            DebugLogManager.info(
+                    TAG,
+                    "⚡ Fast Forward Text Options",
+                    "Using ${currentModel.displayName} for: ${selectedText.take(50)}..."
+            )
+
+            // Build the prompt for text options
+            val prompt = buildTextOptionsPrompt(selectedText, maxOptions)
+
+            // Log the prompt for debugging
+            DebugLogManager.prompt(
+                    TAG,
+                    "Text Options Prompt",
+                    "Model: ${currentModel.id}\nText: ${selectedText.take(100)}\n\n$prompt"
+            )
+
+            // Make API call
+            val response = withContext(Dispatchers.IO) { callOpenRouterAPI(prompt, apiKey) }
+
+            if (response != null) {
+                DebugLogManager.response(TAG, "Text Options Response", response)
+
+                // Parse text options from response
+                val options = parseTextOptionsFromResponse(response)
+
+                Log.d(TAG, "⚡ OpenRouter text options complete: ${options.size} options")
+                trySend(TextOptionStreamEvent.Complete(options))
+            } else {
+                val errorDetail = lastError ?: "Unknown error"
+                DebugLogManager.error(TAG, "OpenRouter Text Options Failed", errorDetail)
+                trySend(TextOptionStreamEvent.Error("OpenRouter: $errorDetail"))
+            }
+
+            close()
+        } catch (e: Exception) {
+            Log.e(TAG, "OpenRouter text options failed", e)
+            DebugLogManager.error(TAG, "Text Options Failed", e.message ?: "Unknown error")
+            trySend(TextOptionStreamEvent.Error("Cloud inference failed: ${e.message}"))
+            close()
+        }
+
+        awaitClose {}
+    }
+
+    /** Build the prompt for text option generation */
+    private fun buildTextOptionsPrompt(selectedText: String, maxOptions: Int): String {
+        return """You are analyzing selected text from a phone screen. Generate $maxOptions helpful action options for this text.
+
+SELECTED TEXT:
+"$selectedText"
+
+Return ONLY a valid JSON array. Each object must have these exact fields:
+- "title": short action name (e.g. "Call number", "Search web", "Copy address")
+- "description": one sentence explanation
+- "type": one of: dial, sms, search, maps, calendar, email, copy, share, open_url, web_search, translate
+- "value": the target value extracted from the text
+
+Consider what the text might be:
+- Phone numbers → offer to call or text
+- Addresses → offer maps/navigation
+- Email addresses → offer to compose email
+- URLs → offer to open
+- Names/topics → offer web search
+- Dates/times → offer calendar
+- General text → offer copy, share, translate, search
+
+Example response:
+[{"title":"Call Number","description":"Dial this phone number","type":"dial","value":"555-1234"},{"title":"Search Web","description":"Look up this topic online","type":"web_search","value":"topic name"}]
+
+Respond with ONLY the JSON array, no markdown, no explanation:"""
+    }
+
+    /** Parse text options from OpenRouter response */
+    private fun parseTextOptionsFromResponse(response: String): List<TextOption> {
+        val options = mutableListOf<TextOption>()
+
+        try {
+            // Clean up response - remove markdown code blocks if present
+            var cleanResponse = response.trim()
+            if (cleanResponse.startsWith("```json")) {
+                cleanResponse = cleanResponse.removePrefix("```json").removeSuffix("```").trim()
+            } else if (cleanResponse.startsWith("```")) {
+                cleanResponse = cleanResponse.removePrefix("```").removeSuffix("```").trim()
+            }
+
+            val jsonArray = JsonParser.parseString(cleanResponse).asJsonArray
+
+            for (i in 0 until minOf(jsonArray.size(), 6)) {
+                try {
+                    val obj = jsonArray[i].asJsonObject
+                    val title = obj.get("title")?.asString ?: continue
+                    val description = obj.get("description")?.asString ?: ""
+                    val type = obj.get("type")?.asString ?: "search"
+                    val value = obj.get("value")?.asString ?: ""
+
+                    val action = createActionFromType(type, value)
+                    val icon = getTextOptionIconForType(type)
+
+                    if (action != null) {
+                        options.add(
+                                TextOption(
+                                        id = UUID.randomUUID().toString(),
+                                        title = title,
+                                        description = description,
+                                        action = action,
+                                        icon = icon
+                                )
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to parse text option at index $i", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse OpenRouter text options", e)
+        }
+
+        return options
+    }
+
+    /** Get the appropriate TextOption icon for the action type */
+    private fun getTextOptionIconForType(type: String): TextOption.TextOptionIcon {
+        return when (type.lowercase()) {
+            "dial", "call" -> TextOption.TextOptionIcon.PHONE
+            "sms" -> TextOption.TextOptionIcon.SMS
+            "search", "web_search" -> TextOption.TextOptionIcon.SEARCH
+            "maps", "navigate" -> TextOption.TextOptionIcon.MAP
+            "calendar" -> TextOption.TextOptionIcon.CALENDAR
+            "email" -> TextOption.TextOptionIcon.EMAIL
+            "copy" -> TextOption.TextOptionIcon.COPY
+            "share" -> TextOption.TextOptionIcon.SHARE
+            "open_url", "url" -> TextOption.TextOptionIcon.WEB
+            "translate" -> TextOption.TextOptionIcon.TRANSLATE
+            else -> TextOption.TextOptionIcon.INFO
+        }
+    }
+
     /** Parse suggestions from OpenRouter response */
     private fun parseSuggestionsFromResponse(
             response: String,

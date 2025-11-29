@@ -53,6 +53,7 @@ fun TextSelectionOverlay(
         onDismiss: () -> Unit,
         onGenerateOptions: () -> Unit = {},
         onOptionSelected: (TextOption) -> Unit = {},
+        onFastForward: () -> Unit = {},
         modifier: Modifier = Modifier
 ) {
         // Fluid entrance animation state
@@ -355,7 +356,8 @@ fun TextSelectionOverlay(
                                 onShare = onShareText,
                                 onClear = { onTextBlocksSelected(emptyList()) },
                                 onGenerateOptions = onGenerateOptions,
-                                onOptionSelected = onOptionSelected
+                                onOptionSelected = onOptionSelected,
+                                onFastForward = onFastForward
                         )
                 }
 
@@ -452,7 +454,8 @@ private fun NothingActionBar(
         onShare: () -> Unit,
         onClear: () -> Unit,
         onGenerateOptions: () -> Unit,
-        onOptionSelected: (TextOption) -> Unit
+        onOptionSelected: (TextOption) -> Unit,
+        onFastForward: () -> Unit = {}
 ) {
         Surface(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -494,7 +497,8 @@ private fun NothingActionBar(
                                         options = textOptions,
                                         isLoading = isGeneratingOptions,
                                         streamingText = streamingText,
-                                        onOptionSelected = onOptionSelected
+                                        onOptionSelected = onOptionSelected,
+                                        onFastForward = onFastForward
                                 )
                                 Spacer(modifier = Modifier.height(16.dp))
                         }
@@ -554,35 +558,62 @@ private fun NothingAIOptions(
         options: List<TextOption>,
         isLoading: Boolean,
         streamingText: String,
-        onOptionSelected: (TextOption) -> Unit
+        onOptionSelected: (TextOption) -> Unit,
+        onFastForward: () -> Unit = {}
 ) {
         Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-                // Header
+                // Header with fast forward button
                 Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                        Box(modifier = Modifier.size(4.dp).background(NothingRed))
-                        Text(
-                                text = "ai suggestions",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = NothingGray400,
-                                fontFamily = Ndot57
-                        )
+                        Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                                Box(modifier = Modifier.size(4.dp).background(NothingRed))
+                                Text(
+                                        text = "ai suggestions",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = NothingGray400,
+                                        fontFamily = Ndot57
+                                )
+                                if (isLoading) {
+                                        // Static loading dots (animations removed)
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                repeat(3) { _ ->
+                                                        Box(
+                                                                modifier =
+                                                                        Modifier.size(3.dp)
+                                                                                .background(
+                                                                                        NothingRed,
+                                                                                        RoundedCornerShape(50)
+                                                                                )
+                                                        )
+                                                }
+                                        }
+                                }
+                        }
+
+                        // Fast forward button - show when loading
                         if (isLoading) {
-                                // Static loading dots (animations removed)
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        repeat(3) { _ ->
-                                                Box(
-                                                        modifier =
-                                                                Modifier.size(3.dp)
-                                                                        .background(
-                                                                                NothingRed,
-                                                                                RoundedCornerShape(50)
-                                                                        )
+                                Surface(
+                                        onClick = onFastForward,
+                                        modifier = Modifier.size(32.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = androidx.compose.ui.graphics.Color.Transparent,
+                                        border = androidx.compose.foundation.BorderStroke(1.5.dp, NothingRed)
+                                ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                        imageVector = Icons.Default.FastForward,
+                                                        contentDescription = "Fast forward with cloud AI",
+                                                        tint = NothingRed,
+                                                        modifier = Modifier.size(18.dp)
                                                 )
                                         }
                                 }

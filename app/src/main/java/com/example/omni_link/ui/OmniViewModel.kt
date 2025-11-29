@@ -187,6 +187,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         // Text selection callbacks (Circle-to-Search)
         OmniAccessibilityService.onGenerateTextOptions = { generateTextOptions() }
         OmniAccessibilityService.onTextOptionSelected = { option -> executeTextOption(option) }
+        OmniAccessibilityService.onTextSelectionFastForward = { fastForwardTextOptions() }
 
         // Fast forward callback (cloud AI inference - OpenRouter/Gemini)
         OmniAccessibilityService.onFastForward = { fastForwardSuggestions() }
@@ -960,6 +961,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                         }
                                     }
                                 }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        // Don't treat cancellation as an error - just rethrow
+                        Log.d(TAG, "Suggestion generation cancelled")
+                        throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Error generating suggestions", e)
                         _suggestionState.update {
@@ -1100,6 +1105,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                         }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        // Don't treat cancellation as an error - just rethrow
+                        Log.d(TAG, "Fast Forward cancelled")
+                        throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Fast Forward error", e)
                         _suggestionState.update {
@@ -1404,6 +1413,97 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                 isGeneratingOptions = false,
                                 optionsStreamingText = "",
                                 error = e.message
+                        )
+                )
+            }
+        }
+    }
+
+    /** Fast forward: Use OpenRouter cloud AI for text options (ultra-fast) */
+    private fun fastForwardTextOptions() {
+        viewModelScope.launch {
+            val service = OmniAccessibilityService.instance ?: return@launch
+            val selectedText = OmniAccessibilityService.textSelectionState.value.getSelectedText()
+
+            if (selectedText.isBlank()) {
+                Log.w(TAG, "No text selected for fast forward")
+                return@launch
+            }
+
+            val model = _currentOpenRouterModel.value
+            val providerName = "OpenRouter (${model.displayName})"
+
+            Log.d(TAG, "⚡ Fast forward text options triggered - using $providerName")
+            DebugLogManager.info(
+                    TAG,
+                    "⚡ Fast Forward Text",
+                    "Using $providerName for: ${selectedText.take(50)}..."
+            )
+
+            // Update state to show cloud loading
+            service.updateTextSelectionState(
+                    OmniAccessibilityService.textSelectionState.value.copy(
+                            isGeneratingOptions = true,
+                            optionsStreamingText = "🌐 Fast Forward via $providerName...",
+                            textOptions = emptyList()
+                    )
+            )
+
+            try {
+                // Use OpenRouter for cloud inference
+                OpenRouterProvider.generateTextOptionsStreaming(selectedText, maxOptions = 6)
+                        .collect { event ->
+                            when (event) {
+                                is com.example.omni_link.ai.TextOptionStreamEvent.Token -> {
+                                    service.updateTextSelectionState(
+                                            OmniAccessibilityService.textSelectionState.value.copy(
+                                                    optionsStreamingText = event.fullText
+                                            )
+                                    )
+                                }
+                                is com.example.omni_link.ai.TextOptionStreamEvent.Complete -> {
+                                    Log.d(
+                                            TAG,
+                                            "🌐 Fast Forward text options complete: ${event.options.size} options"
+                                    )
+                                    DebugLogManager.success(
+                                            TAG,
+                                            "⚡ Fast Forward Complete",
+                                            "${event.options.size} options generated via cloud"
+                                    )
+                                    service.updateTextSelectionState(
+                                            OmniAccessibilityService.textSelectionState.value.copy(
+                                                    isGeneratingOptions = false,
+                                                    textOptions = event.options,
+                                                    optionsStreamingText = ""
+                                            )
+                                    )
+                                }
+                                is com.example.omni_link.ai.TextOptionStreamEvent.Error -> {
+                                    Log.e(TAG, "Fast Forward text options failed: ${event.message}")
+                                    DebugLogManager.error(
+                                            TAG,
+                                            "⚡ Fast Forward Failed",
+                                            event.message
+                                    )
+                                    service.updateTextSelectionState(
+                                            OmniAccessibilityService.textSelectionState.value.copy(
+                                                    isGeneratingOptions = false,
+                                                    optionsStreamingText = "",
+                                                    error = "Cloud error: ${event.message}"
+                                            )
+                                    )
+                                }
+                            }
+                        }
+            } catch (e: Exception) {
+                Log.e(TAG, "Fast Forward text options error", e)
+                DebugLogManager.error(TAG, "⚡ Fast Forward Error", e.message ?: "Unknown error")
+                service.updateTextSelectionState(
+                        OmniAccessibilityService.textSelectionState.value.copy(
+                                isGeneratingOptions = false,
+                                optionsStreamingText = "",
+                                error = "Cloud error: ${e.message}"
                         )
                 )
             }
