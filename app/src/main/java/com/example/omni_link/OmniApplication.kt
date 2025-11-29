@@ -5,8 +5,8 @@ import android.util.Log
 import com.cactus.CactusContextInitializer
 
 /**
- * Application class for Omni-Link
- * Initializes global dependencies including Cactus SDK
+ * Application class for NOMM (Nothing On My Mind) Initializes global dependencies including Cactus
+ * SDK
  */
 class OmniApplication : Application() {
 
@@ -35,11 +35,3 @@ class OmniApplication : Application() {
         }
     }
 }
-
-
-
-
-
-
-
-

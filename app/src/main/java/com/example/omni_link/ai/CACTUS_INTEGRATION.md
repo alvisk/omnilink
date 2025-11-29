@@ -1,6 +1,6 @@
 # Cactus SDK Integration Guide
 
-This document explains the Cactus SDK integration in Omni-Link.
+This document explains the Cactus SDK integration in NOMM (Nothing On My Mind).
 
 ## Current Status
 
@@ -29,7 +29,7 @@ The app uses `com.cactuscompute:cactus:1.0.2-beta` from Maven Central.
 The app's `ModelManager` supports these quantized GGUF models:
 
 - **qwen2.5-0.5b-q4** (~400MB) - Ultra-fast, good for simple tasks
-- **qwen2.5-1.5b-q4** (~1GB) - Balanced speed and quality  
+- **qwen2.5-1.5b-q4** (~1GB) - Balanced speed and quality
 - **smollm2-135m-q8** (~150MB) - Tiny footprint, basic tasks
 - **smollm2-360m-q8** (~400MB) - Small but capable
 

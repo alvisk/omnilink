@@ -1,8 +1,25 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.ksp)
     alias(libs.plugins.compose.compiler)
+}
+
+// Load keystore properties for release signing
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
+// 🔑 Load API keys from secrets.properties (gitignored)
+val secretsPropertiesFile = rootProject.file("secrets.properties")
+val secretsProperties = Properties()
+if (secretsPropertiesFile.exists()) {
+    secretsProperties.load(FileInputStream(secretsPropertiesFile))
 }
 
 android {
@@ -11,7 +28,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.omni_link"
-        minSdk = 26 // Bumped for better AI/ML support
+        minSdk = 34 // Required for Nothing Glyph SDK (Nothing Phone 3 ships with Android 14)
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -22,26 +39,51 @@ android {
             useSupportLibrary = true
         }
 
+        // 🔑 API Keys from secrets.properties (BuildConfig fields)
+        buildConfigField(
+            "String",
+            "OPENROUTER_API_KEY",
+            "\"${secretsProperties.getProperty("OPENROUTER_API_KEY", "")}\""
+        )
+
         // 🚀 PERFORMANCE: Target arm64-v8a for Nothing Phone 3 (Snapdragon 8s Gen 3)
-        // This enables NEON SIMD instructions and removes unnecessary x86/arm-v7 code
+        // This enables NEON SIMD instructions and removes unnecessary x86/arm-v8 code
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
     }
 
+    // 🔐 Signing configuration for release builds
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // 🚀 PERFORMANCE: Enable optimizations for hackathon demo
+            // 🚀 PERFORMANCE: Enable optimizations for production
             isMinifyEnabled = true  // Shrink & optimize bytecode
             isShrinkResources = true // Remove unused resources
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Sign with release keystore
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         // Fast debug builds for development
         debug {
             isMinifyEnabled = false
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
     }
 
@@ -56,6 +98,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true  // Enable BuildConfig for API keys
     }
 
     packaging {
@@ -70,6 +113,10 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
+    implementation(libs.splashscreen)
+
+    // 💫 Nothing Glyph Matrix SDK - LED matrix control for Nothing Phone 3
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 
     // Compose
     implementation(platform(libs.compose.bom))
@@ -89,6 +136,9 @@ dependencies {
 
     // 🔍 ML Kit Text Recognition - for Circle-to-Search style OCR
     implementation("com.google.mlkit:text-recognition:16.0.1")
+
+    // 👁️ ML Kit Image Labeling - for on-device object detection & scene analysis
+    implementation("com.google.mlkit:image-labeling:17.0.9")
 
     // Room for persistent memory (Track 1: Memory Master)
     implementation(libs.room.runtime)

@@ -1,0 +1,174 @@
+appId: com.example.omni_link
+name: NOMM App Walkthrough Screenshots
+---
+
+# =============================================================================
+# NOMM (Nothing On My Mind) - Automated Walkthrough Screenshot Capture
+# =============================================================================
+#
+# This Maestro flow captures screenshots of all key screens for app store
+# listings, documentation, or marketing materials.
+#
+# USAGE:
+#   1. Install Maestro: curl -Ls "https://get.maestro.mobile.dev" | bash
+#   2. Connect your Nothing Phone via USB (with USB debugging enabled)
+#   3. Run: maestro test .maestro/walkthrough.yaml
+#
+# Screenshots are saved to ~/.maestro/tests/{test_id}/
+# =============================================================================
+
+# Clear app data to start fresh (shows onboarding)
+- clearState
+
+# Launch the app
+- launchApp
+
+# -----------------------------------------------------------------------------
+# ONBOARDING SCREEN 1: Welcome / NOMM. Introduction
+# -----------------------------------------------------------------------------
+- assertVisible: "NOMM."
+- extendedWaitUntil:
+    visible: "Nothing On My Mind"
+    timeout: 5000
+
+- takeScreenshot: 01_onboarding_welcome
+
+# -----------------------------------------------------------------------------
+# ONBOARDING SCREEN 2: On-Device AI
+# -----------------------------------------------------------------------------
+- swipe:
+    direction: LEFT
+    duration: 400
+
+- extendedWaitUntil:
+    visible: "ON-DEVICE AI"
+    timeout: 3000
+
+- takeScreenshot: 02_onboarding_ondevice_ai
+
+# -----------------------------------------------------------------------------
+# ONBOARDING SCREEN 3: Screen-Aware
+# -----------------------------------------------------------------------------
+- swipe:
+    direction: LEFT
+    duration: 400
+
+- extendedWaitUntil:
+    visible: "SCREEN-AWARE"
+    timeout: 3000
+
+- takeScreenshot: 03_onboarding_screen_aware
+
+# -----------------------------------------------------------------------------
+# ONBOARDING SCREEN 4: Glyph Matrix
+# -----------------------------------------------------------------------------
+- swipe:
+    direction: LEFT
+    duration: 400
+
+- extendedWaitUntil:
+    visible: "GLYPH MATRIX"
+    timeout: 3000
+
+- takeScreenshot: 04_onboarding_glyph_matrix
+
+# -----------------------------------------------------------------------------
+# Complete Onboarding → Main Chat Screen
+# -----------------------------------------------------------------------------
+- tapOn: "GET STARTED"
+
+- extendedWaitUntil:
+    visible: "NOMM."
+    timeout: 5000
+
+# Wait for UI to settle
+- scroll
+
+- takeScreenshot: 05_main_chat_empty
+
+# -----------------------------------------------------------------------------
+# Open Settings / Permission Sheet
+# -----------------------------------------------------------------------------
+# Tap the gear/settings icon (top right area)
+- tapOn:
+    point: "90%,8%"
+
+- extendedWaitUntil:
+    visible:
+      text: ".*permission.*"
+      regex: true
+    timeout: 3000
+
+- takeScreenshot: 06_permissions_sheet
+
+# Close the sheet by tapping outside or pressing back
+- back
+
+# -----------------------------------------------------------------------------
+# Open Model Settings
+# -----------------------------------------------------------------------------
+# Tap the brain/model icon
+- tapOn:
+    point: "80%,8%"
+
+- extendedWaitUntil:
+    visible: "MODEL"
+    timeout: 3000
+
+- takeScreenshot: 07_model_settings
+
+# Go back to main screen
+- back
+
+# -----------------------------------------------------------------------------
+# Open Glyph Settings
+# (Accessed from settings menu or specific icon)
+# -----------------------------------------------------------------------------
+# This may need adjustment based on actual navigation
+- tapOn:
+    point: "70%,8%"
+
+- extendedWaitUntil:
+    visible: "GLYPH"
+    timeout: 3000
+
+- takeScreenshot: 08_glyph_settings
+
+# Scroll to show more glyph options
+- scroll
+
+- takeScreenshot: 09_glyph_settings_scrolled
+
+# Go back
+- back
+
+# -----------------------------------------------------------------------------
+# Type a sample message in chat
+# -----------------------------------------------------------------------------
+- tapOn:
+    text: ".*ask.*"
+    regex: true
+
+- inputText: "What's on my screen right now?"
+
+- takeScreenshot: 10_chat_with_input
+
+# Send the message
+- tapOn:
+    point: "95%,92%"
+
+# Wait for response (adjust timeout based on model speed)
+- extendedWaitUntil:
+    visible:
+      text: ".*"
+    timeout: 10000
+
+- takeScreenshot: 11_chat_with_response
+
+# =============================================================================
+# COMPLETE
+# =============================================================================
+- runScript:
+    script: |
+      console.log("✅ Walkthrough complete! Screenshots saved.")
+      console.log("📁 Find them in: ~/.maestro/tests/")

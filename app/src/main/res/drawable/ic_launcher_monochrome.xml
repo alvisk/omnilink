@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!--
+    OMNI Monochrome - Möbius Infinity
+    Clean single-color for themed icons
+    -->
+
+    <!-- Infinity/Möbius outline -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="
+            M24,54
+            Q24,38 39,38
+            Q54,38 54,48
+            Q54,38 69,38
+            Q84,38 84,54
+            Q84,70 69,70
+            Q54,70 54,60
+            Q54,70 39,70
+            Q24,70 24,54
+            Z
+            M32,54
+            Q32,64 42,64
+            Q50,64 52,58
+            L56,58
+            Q58,64 66,64
+            Q76,64 76,54
+            Q76,44 66,44
+            Q58,44 56,50
+            L52,50
+            Q50,44 42,44
+            Q32,44 32,54
+            Z" />
+
+</vector>
+
+

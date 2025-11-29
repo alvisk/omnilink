@@ -71,7 +71,7 @@ fun DebugFloatingButton(
                         onClick = onClick,
                         modifier = Modifier.size(40.dp),
                         color = OmniBlack.copy(alpha = 0.9f),
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(12.dp),
                         border =
                                 androidx.compose.foundation.BorderStroke(
                                         1.dp,
@@ -132,7 +132,7 @@ fun DebugOverlayPanel(
                                                 else Modifier.heightIn(max = 250.dp)
                                         ),
                         color = OmniBlack.copy(alpha = 0.95f),
-                        shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
+                        shape = RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp),
                         shadowElevation = 8.dp
                 ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
@@ -208,7 +208,9 @@ private fun DebugPanelHeader(
         ) {
                 // Terminal icon
                 Box(
-                        modifier = Modifier.size(24.dp).background(OmniGreen),
+                        modifier =
+                                Modifier.size(24.dp)
+                                        .background(OmniGreen, RoundedCornerShape(6.dp)),
                         contentAlignment = Alignment.Center
                 ) {
                         Text(
@@ -244,7 +246,9 @@ private fun DebugPanelHeader(
                         // Copy button
                         IconButton(
                                 onClick = onCopy,
-                                modifier = Modifier.size(28.dp).background(OmniGrayMid)
+                                modifier =
+                                        Modifier.size(28.dp)
+                                                .background(OmniGrayMid, RoundedCornerShape(8.dp))
                         ) {
                                 Icon(
                                         imageVector = Icons.Default.ContentCopy,
@@ -257,7 +261,9 @@ private fun DebugPanelHeader(
                         // Clear button
                         IconButton(
                                 onClick = onClear,
-                                modifier = Modifier.size(28.dp).background(OmniGrayMid)
+                                modifier =
+                                        Modifier.size(28.dp)
+                                                .background(OmniGrayMid, RoundedCornerShape(8.dp))
                         ) {
                                 Icon(
                                         imageVector = Icons.Default.Delete,
@@ -270,7 +276,9 @@ private fun DebugPanelHeader(
                         // Expand/collapse button
                         IconButton(
                                 onClick = onToggleExpand,
-                                modifier = Modifier.size(28.dp).background(OmniGrayMid)
+                                modifier =
+                                        Modifier.size(28.dp)
+                                                .background(OmniGrayMid, RoundedCornerShape(8.dp))
                         ) {
                                 Icon(
                                         imageVector =
@@ -286,7 +294,9 @@ private fun DebugPanelHeader(
                         // Close button
                         IconButton(
                                 onClick = onDismiss,
-                                modifier = Modifier.size(28.dp).background(OmniRed)
+                                modifier =
+                                        Modifier.size(28.dp)
+                                                .background(OmniRed, RoundedCornerShape(8.dp))
                         ) {
                                 Icon(
                                         imageVector = Icons.Default.Close,
@@ -338,7 +348,7 @@ private fun FilterChip(label: String, isSelected: Boolean, color: Color, onClick
                 onClick = onClick,
                 modifier = Modifier.height(24.dp),
                 color = if (isSelected) color.copy(alpha = 0.2f) else Color.Transparent,
-                shape = RoundedCornerShape(2.dp),
+                shape = RoundedCornerShape(12.dp),
                 border =
                         androidx.compose.foundation.BorderStroke(
                                 1.dp,
@@ -368,8 +378,15 @@ private fun LogEntryRow(log: DebugLogEntry) {
         Column(
                 modifier =
                         Modifier.fillMaxWidth()
-                                .background(OmniGrayDark.copy(alpha = 0.5f))
-                                .border(1.dp, OmniGrayMid.copy(alpha = 0.3f))
+                                .background(
+                                        OmniGrayDark.copy(alpha = 0.5f),
+                                        RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                        1.dp,
+                                        OmniGrayMid.copy(alpha = 0.3f),
+                                        RoundedCornerShape(8.dp)
+                                )
                                 .clickable(enabled = log.details != null) {
                                         isExpanded = !isExpanded
                                 }
@@ -390,8 +407,11 @@ private fun LogEntryRow(log: DebugLogEntry) {
                         // Level badge
                         Box(
                                 modifier =
-                                        Modifier.background(levelColor.copy(alpha = 0.2f))
-                                                .border(1.dp, levelColor)
+                                        Modifier.background(
+                                                        levelColor.copy(alpha = 0.2f),
+                                                        RoundedCornerShape(4.dp)
+                                                )
+                                                .border(1.dp, levelColor, RoundedCornerShape(4.dp))
                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                         ) {
                                 Text(

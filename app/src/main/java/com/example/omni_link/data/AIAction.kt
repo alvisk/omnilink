@@ -103,11 +103,6 @@ sealed class AIAction {
             val album: String? = null
     ) : AIAction()
 
-    /** Take a photo or video */
-    data class CaptureMedia(
-            val video: Boolean = false // true for video, false for photo
-    ) : AIAction()
-
     /** Open device settings to a specific section */
     data class OpenSettings(val section: SettingsSection = SettingsSection.MAIN) : AIAction()
 

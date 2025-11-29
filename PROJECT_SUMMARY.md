@@ -1,8 +1,8 @@
-# Omni-Link: On-Device AI Assistant for Android
+# NOMM: Nothing On My Mind - On-Device AI Assistant for Android
 
 ## Project Overview
 
-**Omni-Link** is a privacy-focused Android AI assistant that runs entirely on-device using the Cactus SDK for local LLM inference. It uses Android's Accessibility Service to see and interact with any app on the phone, enabling voice/text commands to control the device.
+**NOMM (Nothing On My Mind)** is a privacy-focused Android AI assistant that runs entirely on-device using the Cactus SDK for local LLM inference. It uses Android's Accessibility Service to see and interact with any app on the phone, enabling voice/text commands to control the device.
 
 ### Core Value Proposition
 - **100% Private**: All AI processing happens locally on the device
@@ -131,7 +131,7 @@ data class ScreenElement(
 )
 ```
 
-**App Opening**: Maps common app names to package names (Settings, Chrome, Messages, Phone, Camera, Clock, etc.)
+**App Opening**: Maps common app names to package names (Settings, Chrome, Messages, Phone, Clock, Photos, etc.)
 
 ### 3. AI Action System (`data/AIAction.kt`)
 
@@ -176,11 +176,11 @@ data class ActionPlan(
 
 #### Theme (Black & Red Blocky Design)
 ```kotlin
-// Primary Colors
-val OmniRed = Color(0xFFFF0000)      // Pure red accent
-val OmniBlack = Color(0xFF000000)    // Pure black background
-val OmniGrayDark = Color(0xFF1A1A1A) // Card backgrounds
-val OmniGreen = Color(0xFF00FF00)    // Terminal green for success
+// Primary Colors (NOMM = Nothing On My Mind)
+val NothingRed = Color(0xFFD71921)   // Nothing's signature red
+val NOMMBlack = Color(0xFF000000)    // Pure black background
+val NOMMGrayDark = Color(0xFF141414) // Card backgrounds
+val NothingRedGlow = Color(0xFFFF2D36) // Brighter red for emphasis
 
 // Typography: Nothing Phone fonts
 // - NDot55: Dot-matrix display font for headlines
@@ -354,13 +354,13 @@ implementation("com.google.code.gson:gson:2.10.1")
 ### Colors
 | Name | Hex | Usage |
 |------|-----|-------|
-| OmniRed | #FF0000 | Primary accent, active states |
-| OmniBlack | #000000 | Background |
-| OmniGrayDark | #1A1A1A | Card backgrounds |
-| OmniGrayMid | #2A2A2A | Borders |
-| OmniGrayText | #888888 | Secondary text |
-| OmniWhite | #FFFFFF | Primary text |
-| OmniGreen | #00FF00 | Success states |
+| NOMMRed | #D71921 | Primary accent, active states |
+| NOMMBlack | #000000 | Background |
+| NOMMGrayDark | #141414 | Card backgrounds |
+| NOMMGrayMid | #262626 | Borders |
+| NOMMGrayText | #808080 | Secondary text |
+| NOMMWhite | #FFFFFF | Primary text |
+| NothingRed | #D71921 | Success states |
 
 ### Typography
 - **Headlines**: NDot55 (dot-matrix aesthetic)
@@ -426,7 +426,7 @@ These are Nothing Phone brand fonts that give the UI its distinctive look.
 adb install app/build/outputs/apk/debug/app-debug.apk
 
 # Enable Accessibility Service
-# Settings > Accessibility > Omni > Enable
+# Settings > Accessibility > NOMM > Enable
 ```
 
 **Testing Requirements**:

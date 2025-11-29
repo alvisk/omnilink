@@ -28,8 +28,6 @@ data class Suggestion(
         TIMER, // Timer
         EMAIL, // Email
         MAP, // Maps/navigation
-        CAMERA, // Camera/photo
-        VIDEO, // Video
         MUSIC, // Play media
         SETTINGS, // Settings
         WEB // URL/browser
@@ -43,10 +41,14 @@ data class SuggestionState(
         val suggestions: List<Suggestion> = emptyList(),
         val error: String? = null,
         val lastScreenContext: String? = null,
+        val lastScreenState: ScreenState? = null, // Store actual screen state for fast forward
         val streamingText: String = "", // Real-time AI thinking output
         val isStreaming: Boolean = false,
         // Focus area feature
         val focusRegion: FocusRegion? = null,
         val focusAreaSelectionState: FocusAreaSelectionState = FocusAreaSelectionState(),
-        val isFocusAreaModeEnabled: Boolean = false
+        val isFocusAreaModeEnabled: Boolean = false,
+        // Cloud inference feature (fast forward)
+        val isCloudInferenceActive: Boolean = false,
+        val canUseFastForward: Boolean = true // Fast forward uses OpenRouter cloud AI
 )

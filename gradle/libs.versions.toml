@@ -15,6 +15,7 @@ navigationCompose = "2.8.4"
 roomVersion = "2.8.4"
 coroutines = "1.10.1"
 gson = "2.10.1"
+splashscreen = "1.0.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -48,6 +49,9 @@ coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutin
 
 # JSON
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+
+# Splash Screen
+splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "splashscreen" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

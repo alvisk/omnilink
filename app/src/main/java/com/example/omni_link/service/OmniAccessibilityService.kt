@@ -47,6 +47,8 @@ import com.example.omni_link.data.Suggestion
 import com.example.omni_link.data.SuggestionState
 import com.example.omni_link.data.TextSelectionState
 import com.example.omni_link.debug.DebugLogManager
+import com.example.omni_link.glyph.GlyphMatrixHelper
+import com.example.omni_link.glyph.GlyphType
 import com.example.omni_link.ocr.TextRecognitionHelper
 import com.example.omni_link.ui.DebugFloatingButton
 import com.example.omni_link.ui.DebugOverlayPanel
@@ -60,8 +62,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Enhanced Accessibility Service for Omni-Link AI Assistant Captures screen content and executes
- * AI-directed actions
+ * Enhanced Accessibility Service for NOMM (Nothing On My Mind) AI Assistant. Captures screen
+ * content and executes AI-directed actions.
  */
 class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedStateRegistryOwner {
 
@@ -97,6 +99,9 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         var onFocusAreaClear: (() -> Unit)? = null
         var onFocusAreaConfirm: (() -> Unit)? = null
 
+        // Fast forward callback (cloud AI inference - OpenRouter/Gemini)
+        var onFastForward: (() -> Unit)? = null
+
         // Text selection state for Circle-to-Search
         private val _textSelectionState = MutableStateFlow(TextSelectionState())
         val textSelectionState: StateFlow<TextSelectionState> = _textSelectionState
@@ -112,6 +117,10 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         // Text option callbacks (Circle-to-Search AI options)
         var onGenerateTextOptions: (() -> Unit)? = null
         var onTextOptionSelected: ((TextOption) -> Unit)? = null
+
+        // Observable floating overlay state (for syncing with ViewModel/UI)
+        private val _floatingOverlayEnabled = MutableStateFlow(false)
+        val floatingOverlayEnabled: StateFlow<Boolean> = _floatingOverlayEnabled
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -126,14 +135,21 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
     // OCR helper for text recognition
     private val textRecognitionHelper = TextRecognitionHelper()
 
+    // Glyph Matrix helper for Nothing Phone 3 LED display
+    private var glyphMatrixHelper: GlyphMatrixHelper? = null
+
     // Debounce job for screen capture - cancel previous job when new event arrives
     private var screenCaptureJob: Job? = null
 
-    // Track if floating overlay is enabled
-    private var isFloatingOverlayEnabled = false
+    // Track if floating overlay is enabled (syncs with companion StateFlow)
+    private var isFloatingOverlayEnabled: Boolean
+        get() = _floatingOverlayEnabled.value
+        set(value) {
+            _floatingOverlayEnabled.value = value
+        }
 
-    // Track if debug overlay is enabled
-    private var isDebugOverlayEnabled = false
+    // Track if debug overlay is enabled (ON by default)
+    private var isDebugOverlayEnabled = true
 
     // Lifecycle management for Compose
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -160,7 +176,10 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         lifecycleRegistry.currentState = Lifecycle.State.STARTED
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
 
-        Log.d(TAG, "Omni Accessibility Service connected")
+        Log.d(TAG, "NOMM Accessibility Service connected")
+
+        // Initialize and display Glyph Matrix logo on Nothing Phone 3
+        initializeGlyphMatrix()
 
         // Initial screen capture
         captureScreen()
@@ -170,6 +189,11 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         super.onDestroy()
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         serviceScope.cancel()
+
+        // Clean up Glyph Matrix
+        glyphMatrixHelper?.cleanup()
+        glyphMatrixHelper = null
+
         instance = null
         _isRunning.value = false
         removeOverlay()
@@ -178,6 +202,66 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
     override fun onInterrupt() {
         Log.w(TAG, "Service interrupted")
         removeOverlay()
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NOTHING PHONE 3 GLYPH MATRIX METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Initialize the Glyph Matrix and display the NOMM logo. This runs when the accessibility
+     * service connects on Nothing Phone 3.
+     */
+    private fun initializeGlyphMatrix() {
+        Log.d(TAG, "Initializing Glyph Matrix for Nothing Phone 3")
+
+        glyphMatrixHelper =
+                GlyphMatrixHelper(this).apply {
+                    initialize(
+                            object : GlyphMatrixHelper.GlyphCallback {
+                                override fun onSuccess() {
+                                    Log.d(TAG, "Glyph Matrix initialized, displaying logo")
+                                    // Start the breathing logo animation
+                                    displayBreathingLogo()
+                                }
+
+                                override fun onFailure(error: String) {
+                                    Log.w(TAG, "Glyph Matrix init failed: $error")
+                                    // Not a critical error - device might not be Nothing Phone 3
+                                }
+                            }
+                    )
+                }
+    }
+
+    /** Show a static logo on the Glyph Matrix. */
+    fun showGlyphLogo() {
+        glyphMatrixHelper?.displayLogo()
+    }
+
+    /** Show a breathing/pulsing logo animation on the Glyph Matrix. */
+    fun showGlyphBreathingLogo() {
+        glyphMatrixHelper?.displayBreathingLogo()
+    }
+
+    /** Clear the Glyph Matrix display. */
+    fun clearGlyphDisplay() {
+        glyphMatrixHelper?.clearDisplay()
+    }
+
+    /** Check if the Glyph Matrix is available and initialized. */
+    fun isGlyphMatrixReady(): Boolean {
+        return glyphMatrixHelper?.isReady() == true
+    }
+
+    /** Set the glyph type to display. */
+    fun setGlyphType(type: GlyphType) {
+        glyphMatrixHelper?.setGlyphType(type)
+        // If currently displaying, restart the animation with the new type
+        if (glyphMatrixHelper?.isDisplaying() == true) {
+            glyphMatrixHelper?.clearDisplay()
+            glyphMatrixHelper?.displayBreathingLogo()
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -321,7 +405,6 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                     is AIAction.SendEmail -> executeSendEmail(action)
                     is AIAction.OpenMaps -> executeOpenMaps(action)
                     is AIAction.PlayMedia -> executePlayMedia(action)
-                    is AIAction.CaptureMedia -> executeCaptureMedia(action)
                     is AIAction.OpenSettings -> executeOpenSettings(action)
                 }
 
@@ -596,7 +679,6 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                         "phone" to "com.google.android.dialer",
                         "dialer" to "com.google.android.dialer",
                         "contacts" to "com.google.android.contacts",
-                        "camera" to "com.android.camera2",
                         "photos" to "com.google.android.apps.photos",
                         "gallery" to "com.google.android.apps.photos",
                         "clock" to "com.google.android.deskclock",
@@ -980,23 +1062,6 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         }
     }
 
-    /** Capture photo or video */
-    private fun executeCaptureMedia(action: AIAction.CaptureMedia): ActionResult {
-        return try {
-            val intent =
-                    if (action.video) {
-                        Intent(MediaStore.ACTION_VIDEO_CAPTURE)
-                    } else {
-                        Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                    }
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            ActionResult.Success(if (action.video) "Opening video camera" else "Opening camera")
-        } catch (e: Exception) {
-            ActionResult.Failure("Failed to open camera: ${e.message}")
-        }
-    }
-
     /** Open settings to a specific section */
     private fun executeOpenSettings(action: AIAction.OpenSettings): ActionResult {
         return try {
@@ -1118,7 +1183,7 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                                     }
                             )
 
-                            // Main AI suggestions button (larger, red)
+                            // Main AI suggestions button
                             OmniFloatingButton(
                                     onClick = {
                                         Log.d(TAG, "Floating button clicked")
@@ -1179,9 +1244,6 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         }
     }
 
-    /** Check if floating overlay is currently enabled */
-    fun isFloatingOverlayEnabled(): Boolean = isFloatingOverlayEnabled
-
     /** Show full overlay with suggestions panel */
     fun showSuggestionsOverlay() {
         // Hide floating button while showing full overlay
@@ -1239,6 +1301,10 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                                 onClearFocusArea = {
                                     Log.d(TAG, "Clear focus area clicked")
                                     onFocusAreaClear?.invoke()
+                                },
+                                onFastForward = {
+                                    Log.d(TAG, "⚡ Fast forward clicked - using cloud AI")
+                                    onFastForward?.invoke()
                                 }
                         )
                     }
@@ -1821,6 +1887,10 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                                 onDismiss = {
                                     onTextSelectionDismiss?.invoke()
                                     hideTextSelectionOverlay()
+                                },
+                                onGenerateOptions = { onGenerateTextOptions?.invoke() },
+                                onOptionSelected = { option ->
+                                    onTextOptionSelected?.invoke(option)
                                 }
                         )
                     }

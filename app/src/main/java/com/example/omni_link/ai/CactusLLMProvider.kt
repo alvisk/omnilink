@@ -6,6 +6,7 @@ import com.cactus.CactusCompletionParams
 import com.cactus.CactusInitParams
 import com.cactus.CactusLM
 import com.cactus.ChatMessage as CactusChatMessage
+import com.cactus.InferenceMode
 import com.example.omni_link.data.AIAction
 import com.example.omni_link.data.ActionPlan
 import com.example.omni_link.data.FocusRegion
@@ -87,7 +88,7 @@ class CactusLLMProvider(
                 // System prompt optimized for screen control
                 val SYSTEM_PROMPT =
                         """
-You are Omni, a helpful AI assistant running entirely on the user's device. You can see and interact with any app on their phone through the accessibility service.
+You are NOMM (Nothing On My Mind), a helpful AI assistant running entirely on the user's device. You can see and interact with any app on their phone through the accessibility service.
 
 ## Your Capabilities:
 1. READ: See all UI elements on screen (buttons, text, inputs, etc.)
@@ -113,7 +114,7 @@ Always respond in this JSON format:
     {"type": "open_app", "app": "app name"},
     {"type": "wait", "ms": 1000},
     {"type": "open_calendar"},
-    {"type": "open_calendar", "title": "Meeting", "description": "Team sync", "location": "Office"},
+    {"type": "open_calendar", "title": "Meeting", "description": "Team sync", "location": "Office", "date": "2025-01-15", "time": "14:00", "duration_minutes": 60},
     {"type": "dial", "phone": "555-1234"},
     {"type": "call", "phone": "555-1234"},
     {"type": "sms", "phone": "555-1234", "message": "Hello!"},
@@ -127,8 +128,6 @@ Always respond in this JSON format:
     {"type": "maps", "query": "coffee shops nearby"},
     {"type": "navigate", "query": "123 Main St"},
     {"type": "play_media", "query": "relaxing music"},
-    {"type": "camera"},
-    {"type": "video"},
     {"type": "settings", "section": "wifi|bluetooth|display|sound|battery|apps|notifications|location|security|accessibility"}
   ],
   "memory": [
@@ -146,6 +145,7 @@ Always respond in this JSON format:
 - Ask for clarification if the request is ambiguous
 - When analyzing screens, describe what you see briefly
 - For phone calls and SMS, use dial/sms to let user confirm, use call only when explicitly asked
+- For calendar events, ALWAYS include "date" and "time" fields when the user mentions a date/time. Use formats: date="2025-01-15" or "tomorrow" or "next Monday", time="14:00" or "2:30 PM"
 """.trimIndent()
         }
 
@@ -740,9 +740,9 @@ SCREEN:
 $screenContext
 
 Return ONLY a JSON array. Each object must have these exact fields:
-- "title": short action name with emoji (e.g. "📞 Call number")
+- "title": short action name (e.g. "Call number")
 - "description": one sentence explanation
-- "type": one of: dial, sms, search, maps, calendar, alarm, timer, email, camera, copy, share, settings_wifi, settings_bluetooth
+- "type": one of: dial, sms, search, maps, calendar, alarm, timer, email, copy, share, settings_wifi, settings_bluetooth
 - "value": the target (phone number, search query, address, etc.)
 
 For CALENDAR type, include these extra fields if available:
@@ -754,8 +754,8 @@ For CALENDAR type, include these extra fields if available:
 - "event_duration_minutes": how long in minutes (default 60)
 
 Example response format:
-[{"title":"📞 Call 07483225245","description":"Dial this phone number","type":"dial","value":"07483225245"}]
-[{"title":"📅 Add Meeting","description":"Schedule this event","type":"calendar","event_title":"Team Meeting","event_description":"Weekly sync","event_location":"Conference Room A","event_date":"2024-12-20","event_time":"10:00","event_duration_minutes":60}]
+[{"title":"Call 07483225245","description":"Dial this phone number","type":"dial","value":"07483225245"}]
+[{"title":"Add Meeting","description":"Schedule this event","type":"calendar","event_title":"Team Meeting","event_description":"Weekly sync","event_location":"Conference Room A","event_date":"2024-12-20","event_time":"10:00","event_duration_minutes":60}]
 
 JSON array:"""
 
@@ -874,7 +874,7 @@ JSON array:"""
                         val phone = match.value.replace(Regex("[\\s\\-\\(\\)]"), "")
                         suggestions.add(
                                 createSuggestion(
-                                        "📞 Call $phone",
+                                        "Call $phone",
                                         "Dial this phone number",
                                         Suggestion.SuggestionIcon.PHONE,
                                         AIAction.DialNumber(phone)
@@ -882,7 +882,7 @@ JSON array:"""
                         )
                         suggestions.add(
                                 createSuggestion(
-                                        "💬 Text $phone",
+                                        "Text $phone",
                                         "Send SMS to this number",
                                         Suggestion.SuggestionIcon.SMS,
                                         AIAction.SendSMS(phone, "")
@@ -895,7 +895,7 @@ JSON array:"""
                 emailPattern.findAll(screenContext).take(1).forEach { match ->
                         suggestions.add(
                                 createSuggestion(
-                                        "✉️ Email ${match.value}",
+                                        "Email ${match.value}",
                                         "Send an email",
                                         Suggestion.SuggestionIcon.EMAIL,
                                         AIAction.SendEmail(match.value, null, null)
@@ -908,7 +908,7 @@ JSON array:"""
                 urlPattern.findAll(screenContext).take(1).forEach { match ->
                         suggestions.add(
                                 createSuggestion(
-                                        "🌐 Open link",
+                                        "Open link",
                                         "Open this URL",
                                         Suggestion.SuggestionIcon.WEB,
                                         AIAction.OpenURL(match.value)
@@ -926,7 +926,7 @@ JSON array:"""
                 ) {
                         suggestions.add(
                                 createSuggestion(
-                                        "🗺️ Open Maps",
+                                        "Open Maps",
                                         "View location on maps",
                                         Suggestion.SuggestionIcon.MAP,
                                         AIAction.OpenMaps(query = "")
@@ -941,7 +941,7 @@ JSON array:"""
                         if (contextLower.contains("search") || contextLower.contains("google")) {
                                 suggestions.add(
                                         createSuggestion(
-                                                "🔍 New search",
+                                                "New search",
                                                 "Search the web",
                                                 Suggestion.SuggestionIcon.SEARCH,
                                                 AIAction.WebSearch("")
@@ -950,7 +950,7 @@ JSON array:"""
                         }
                         suggestions.add(
                                 createSuggestion(
-                                        "📋 Copy page URL",
+                                        "Copy page URL",
                                         "Copy current page link",
                                         Suggestion.SuggestionIcon.COPY,
                                         AIAction.CopyToClipboard("")
@@ -958,7 +958,7 @@ JSON array:"""
                         )
                         suggestions.add(
                                 createSuggestion(
-                                        "📤 Share page",
+                                        "Share page",
                                         "Share this page",
                                         Suggestion.SuggestionIcon.SHARE,
                                         AIAction.ShareText("")
@@ -1048,9 +1048,6 @@ JSON array:"""
                                                         "maps",
                                                         "map",
                                                         "navigation",
-                                                        "camera",
-                                                        "photo",
-                                                        "video",
                                                         "music",
                                                         "media",
                                                         "play",
@@ -1252,6 +1249,17 @@ JSON array:"""
                                                 )
                                         }
                                 }
+                                // Handle standalone day names (monday, tuesday, etc.)
+                                parseDayOfWeek(dateLower) != null -> {
+                                        val targetDay = parseDayOfWeek(dateLower)!!
+                                        val currentDay =
+                                                calendar.get(java.util.Calendar.DAY_OF_WEEK)
+                                        var daysToAdd = targetDay - currentDay
+                                        // If the day is today or already passed this week, go to
+                                        // next occurrence
+                                        if (daysToAdd <= 0) daysToAdd += 7
+                                        calendar.add(java.util.Calendar.DAY_OF_YEAR, daysToAdd)
+                                }
                                 dateLower.matches(Regex("""\d{4}-\d{2}-\d{2}""")) -> {
                                         // ISO format: 2024-12-25
                                         try {
@@ -1352,6 +1360,7 @@ JSON array:"""
                         val timeLower = timeStr.lowercase().trim()
                         try {
                                 when {
+                                        // Handle time with colon: "2:30", "2:30pm", "14:00"
                                         timeLower.matches(
                                                 Regex(
                                                         """\d{1,2}:\d{2}\s*(am|pm)?""",
@@ -1374,6 +1383,61 @@ JSON array:"""
 
                                                 calendar.set(java.util.Calendar.HOUR_OF_DAY, hour)
                                                 calendar.set(java.util.Calendar.MINUTE, minute)
+                                                calendar.set(java.util.Calendar.SECOND, 0)
+                                                calendar.set(java.util.Calendar.MILLISECOND, 0)
+                                        }
+                                        // Handle time without colon: "2pm", "9am", "2 pm"
+                                        timeLower.matches(
+                                                Regex(
+                                                        """\d{1,2}\s*(am|pm)""",
+                                                        RegexOption.IGNORE_CASE
+                                                )
+                                        ) -> {
+                                                val isPM =
+                                                        timeLower.contains("pm", ignoreCase = true)
+                                                val isAM =
+                                                        timeLower.contains("am", ignoreCase = true)
+                                                val hourStr =
+                                                        timeLower.replace(Regex("[apmAPM\\s]"), "")
+                                                var hour = hourStr.toInt()
+
+                                                // Handle 12-hour format
+                                                if (isPM && hour < 12) hour += 12
+                                                if (isAM && hour == 12) hour = 0
+
+                                                calendar.set(java.util.Calendar.HOUR_OF_DAY, hour)
+                                                calendar.set(java.util.Calendar.MINUTE, 0)
+                                                calendar.set(java.util.Calendar.SECOND, 0)
+                                                calendar.set(java.util.Calendar.MILLISECOND, 0)
+                                        }
+                                        // Handle relative times
+                                        timeLower == "noon" || timeLower == "12:00" -> {
+                                                calendar.set(java.util.Calendar.HOUR_OF_DAY, 12)
+                                                calendar.set(java.util.Calendar.MINUTE, 0)
+                                                calendar.set(java.util.Calendar.SECOND, 0)
+                                                calendar.set(java.util.Calendar.MILLISECOND, 0)
+                                        }
+                                        timeLower == "midnight" || timeLower == "00:00" -> {
+                                                calendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                                                calendar.set(java.util.Calendar.MINUTE, 0)
+                                                calendar.set(java.util.Calendar.SECOND, 0)
+                                                calendar.set(java.util.Calendar.MILLISECOND, 0)
+                                        }
+                                        timeLower.contains("morning") -> {
+                                                calendar.set(java.util.Calendar.HOUR_OF_DAY, 9)
+                                                calendar.set(java.util.Calendar.MINUTE, 0)
+                                                calendar.set(java.util.Calendar.SECOND, 0)
+                                                calendar.set(java.util.Calendar.MILLISECOND, 0)
+                                        }
+                                        timeLower.contains("afternoon") -> {
+                                                calendar.set(java.util.Calendar.HOUR_OF_DAY, 14)
+                                                calendar.set(java.util.Calendar.MINUTE, 0)
+                                                calendar.set(java.util.Calendar.SECOND, 0)
+                                                calendar.set(java.util.Calendar.MILLISECOND, 0)
+                                        }
+                                        timeLower.contains("evening") -> {
+                                                calendar.set(java.util.Calendar.HOUR_OF_DAY, 18)
+                                                calendar.set(java.util.Calendar.MINUTE, 0)
                                                 calendar.set(java.util.Calendar.SECOND, 0)
                                                 calendar.set(java.util.Calendar.MILLISECOND, 0)
                                         }
@@ -1570,8 +1634,6 @@ JSON array:"""
                         "email" -> AIAction.SendEmail(target ?: "", null, null)
                         "maps", "map" -> AIAction.OpenMaps(query = target, navigate = false)
                         "navigation" -> AIAction.OpenMaps(query = target, navigate = true)
-                        "camera", "photo" -> AIAction.CaptureMedia(video = false)
-                        "video" -> AIAction.CaptureMedia(video = true)
                         "music", "media", "play" -> AIAction.PlayMedia(target ?: "")
                         "search" -> AIAction.WebSearch(target ?: "")
                         "url", "web", "browser" -> AIAction.OpenURL(target ?: "https://google.com")
@@ -1610,8 +1672,6 @@ JSON array:"""
                         "timer" -> Suggestion.SuggestionIcon.TIMER
                         "email" -> Suggestion.SuggestionIcon.EMAIL
                         "maps", "map", "navigation" -> Suggestion.SuggestionIcon.MAP
-                        "camera", "photo" -> Suggestion.SuggestionIcon.CAMERA
-                        "video" -> Suggestion.SuggestionIcon.VIDEO
                         "music", "media", "play" -> Suggestion.SuggestionIcon.MUSIC
                         "settings",
                         "settings_wifi",
@@ -1686,12 +1746,6 @@ JSON array:"""
                                 contextLower.contains("song") ||
                                 contextLower.contains("video")
 
-                val isCameraContext =
-                        packageName.contains("camera") ||
-                                contextLower.contains("photo") ||
-                                contextLower.contains("picture") ||
-                                contextLower.contains("capture")
-
                 val isSettingsContext =
                         packageName.contains("settings") ||
                                 contextLower.contains("wifi") ||
@@ -1705,7 +1759,7 @@ JSON array:"""
                         val eventDetails = extractEventDetailsFromScreen(screenContext)
                         suggestions.add(
                                 createSuggestion(
-                                        "📅 Create Event" +
+                                        "Create Event" +
                                                 (eventDetails.title?.let { ": $it" } ?: ""),
                                         eventDetails.description ?: "Add new calendar event",
                                         Suggestion.SuggestionIcon.CALENDAR,
@@ -1722,7 +1776,7 @@ JSON array:"""
                 if (isPhoneContext) {
                         suggestions.add(
                                 createSuggestion(
-                                        "📞 Make a Call",
+                                        "Make a Call",
                                         "Open dialer",
                                         Suggestion.SuggestionIcon.PHONE,
                                         AIAction.DialNumber("")
@@ -1732,7 +1786,7 @@ JSON array:"""
                 if (isMessagingContext) {
                         suggestions.add(
                                 createSuggestion(
-                                        "💬 Send Message",
+                                        "Send Message",
                                         "Compose a text",
                                         Suggestion.SuggestionIcon.SMS,
                                         AIAction.SendSMS("", "")
@@ -1742,7 +1796,7 @@ JSON array:"""
                 if (isEmailContext) {
                         suggestions.add(
                                 createSuggestion(
-                                        "✉️ Compose Email",
+                                        "Compose Email",
                                         "Write new email",
                                         Suggestion.SuggestionIcon.EMAIL,
                                         AIAction.SendEmail("", null, null)
@@ -1752,7 +1806,7 @@ JSON array:"""
                 if (isMapContext) {
                         suggestions.add(
                                 createSuggestion(
-                                        "🧭 Get Directions",
+                                        "Get Directions",
                                         "Start navigation",
                                         Suggestion.SuggestionIcon.MAP,
                                         AIAction.OpenMaps(navigate = true)
@@ -1762,7 +1816,7 @@ JSON array:"""
                 if (isBrowserContext) {
                         suggestions.add(
                                 createSuggestion(
-                                        "🔍 Web Search",
+                                        "Web Search",
                                         "Search the internet",
                                         Suggestion.SuggestionIcon.SEARCH,
                                         AIAction.WebSearch("")
@@ -1772,27 +1826,17 @@ JSON array:"""
                 if (isMediaContext) {
                         suggestions.add(
                                 createSuggestion(
-                                        "🎵 Play Music",
+                                        "Play Music",
                                         "Play some tunes",
                                         Suggestion.SuggestionIcon.MUSIC,
                                         AIAction.PlayMedia("")
                                 )
                         )
                 }
-                if (isCameraContext) {
-                        suggestions.add(
-                                createSuggestion(
-                                        "📷 Take Photo",
-                                        "Capture a moment",
-                                        Suggestion.SuggestionIcon.CAMERA,
-                                        AIAction.CaptureMedia(video = false)
-                                )
-                        )
-                }
                 if (isSettingsContext) {
                         suggestions.add(
                                 createSuggestion(
-                                        "⚙️ Open Settings",
+                                        "Open Settings",
                                         "Configure device",
                                         Suggestion.SuggestionIcon.SETTINGS,
                                         AIAction.OpenSettings()
@@ -1822,7 +1866,7 @@ JSON array:"""
                 // Calendar
                 suggestions.add(
                         createSuggestion(
-                                "📅 Open Calendar",
+                                "Open Calendar",
                                 "View your calendar and events",
                                 Suggestion.SuggestionIcon.CALENDAR,
                                 AIAction.OpenCalendar()
@@ -1832,7 +1876,7 @@ JSON array:"""
                 // Phone/Dial
                 suggestions.add(
                         createSuggestion(
-                                "📞 Make a Call",
+                                "Make a Call",
                                 "Open dialer to call someone",
                                 Suggestion.SuggestionIcon.PHONE,
                                 AIAction.DialNumber("")
@@ -1842,7 +1886,7 @@ JSON array:"""
                 // SMS
                 suggestions.add(
                         createSuggestion(
-                                "💬 Send Text Message",
+                                "Send Text Message",
                                 "Compose a new SMS",
                                 Suggestion.SuggestionIcon.SMS,
                                 AIAction.SendSMS("", "")
@@ -1852,7 +1896,7 @@ JSON array:"""
                 // Set Alarm
                 suggestions.add(
                         createSuggestion(
-                                "⏰ Set Alarm",
+                                "Set Alarm",
                                 "Create a new alarm",
                                 Suggestion.SuggestionIcon.ALARM,
                                 AIAction.SetAlarm(8, 0, "Alarm")
@@ -1862,7 +1906,7 @@ JSON array:"""
                 // Set Timer
                 suggestions.add(
                         createSuggestion(
-                                "⏱️ Set Timer",
+                                "Set Timer",
                                 "Start a countdown timer",
                                 Suggestion.SuggestionIcon.TIMER,
                                 AIAction.SetTimer(300, "Timer")
@@ -1872,7 +1916,7 @@ JSON array:"""
                 // Web Search
                 suggestions.add(
                         createSuggestion(
-                                "🔍 Web Search",
+                                "Web Search",
                                 "Search the internet",
                                 Suggestion.SuggestionIcon.SEARCH,
                                 AIAction.WebSearch("")
@@ -1882,7 +1926,7 @@ JSON array:"""
                 // Open URL
                 suggestions.add(
                         createSuggestion(
-                                "🌐 Open Website",
+                                "Open Website",
                                 "Go to a URL",
                                 Suggestion.SuggestionIcon.WEB,
                                 AIAction.OpenURL("https://google.com")
@@ -1892,7 +1936,7 @@ JSON array:"""
                 // Maps
                 suggestions.add(
                         createSuggestion(
-                                "🗺️ Open Maps",
+                                "Open Maps",
                                 "Find places or get directions",
                                 Suggestion.SuggestionIcon.MAP,
                                 AIAction.OpenMaps(query = "")
@@ -1902,7 +1946,7 @@ JSON array:"""
                 // Navigate
                 suggestions.add(
                         createSuggestion(
-                                "🧭 Navigate To...",
+                                "Navigate To...",
                                 "Start turn-by-turn navigation",
                                 Suggestion.SuggestionIcon.MAP,
                                 AIAction.OpenMaps(query = "", navigate = true)
@@ -1912,37 +1956,17 @@ JSON array:"""
                 // Email
                 suggestions.add(
                         createSuggestion(
-                                "✉️ Send Email",
+                                "Send Email",
                                 "Compose a new email",
                                 Suggestion.SuggestionIcon.EMAIL,
                                 AIAction.SendEmail("", null, null)
                         )
                 )
 
-                // Camera
-                suggestions.add(
-                        createSuggestion(
-                                "📷 Take Photo",
-                                "Open camera to take a picture",
-                                Suggestion.SuggestionIcon.CAMERA,
-                                AIAction.CaptureMedia(video = false)
-                        )
-                )
-
-                // Video
-                suggestions.add(
-                        createSuggestion(
-                                "🎥 Record Video",
-                                "Open camera to record video",
-                                Suggestion.SuggestionIcon.VIDEO,
-                                AIAction.CaptureMedia(video = true)
-                        )
-                )
-
                 // Share
                 suggestions.add(
                         createSuggestion(
-                                "📤 Share Text",
+                                "Share Text",
                                 "Share content with other apps",
                                 Suggestion.SuggestionIcon.SHARE,
                                 AIAction.ShareText("")
@@ -1952,7 +1976,7 @@ JSON array:"""
                 // Copy
                 suggestions.add(
                         createSuggestion(
-                                "📋 Copy to Clipboard",
+                                "Copy to Clipboard",
                                 "Copy text to clipboard",
                                 Suggestion.SuggestionIcon.COPY,
                                 AIAction.CopyToClipboard("")
@@ -1962,7 +1986,7 @@ JSON array:"""
                 // Play Media
                 suggestions.add(
                         createSuggestion(
-                                "🎵 Play Music",
+                                "Play Music",
                                 "Search and play music",
                                 Suggestion.SuggestionIcon.MUSIC,
                                 AIAction.PlayMedia("")
@@ -1972,7 +1996,7 @@ JSON array:"""
                 // WiFi Settings
                 suggestions.add(
                         createSuggestion(
-                                "📶 WiFi Settings",
+                                "WiFi Settings",
                                 "Open WiFi settings",
                                 Suggestion.SuggestionIcon.SETTINGS,
                                 AIAction.OpenSettings(AIAction.SettingsSection.WIFI)
@@ -1982,7 +2006,7 @@ JSON array:"""
                 // Bluetooth Settings
                 suggestions.add(
                         createSuggestion(
-                                "🔵 Bluetooth Settings",
+                                "Bluetooth Settings",
                                 "Open Bluetooth settings",
                                 Suggestion.SuggestionIcon.SETTINGS,
                                 AIAction.OpenSettings(AIAction.SettingsSection.BLUETOOTH)
@@ -1992,7 +2016,7 @@ JSON array:"""
                 // Display Settings
                 suggestions.add(
                         createSuggestion(
-                                "🔆 Display Settings",
+                                "Display Settings",
                                 "Adjust brightness and display",
                                 Suggestion.SuggestionIcon.SETTINGS,
                                 AIAction.OpenSettings(AIAction.SettingsSection.DISPLAY)
@@ -2002,7 +2026,7 @@ JSON array:"""
                 // Sound Settings
                 suggestions.add(
                         createSuggestion(
-                                "🔊 Sound Settings",
+                                "Sound Settings",
                                 "Adjust volume and sounds",
                                 Suggestion.SuggestionIcon.SETTINGS,
                                 AIAction.OpenSettings(AIAction.SettingsSection.SOUND)
@@ -2175,7 +2199,7 @@ JSON array:"""
 
                         // Help
                         lowerMessage.contains("help") || lowerMessage.contains("what can you") -> {
-                                """{"thought":"User needs help","response":"I'm Omni, your on-device AI assistant! I can:\n\n• **See** what's on your screen\n• **Click** buttons and links\n• **Type** text in fields\n• **Scroll** through content\n• **Open apps** - try: Settings, Chrome, Messages, Phone, Camera, Clock\n• **Navigate** - go back, go home\n• **Remember** things you tell me\n\n📱 **Device Actions:**\n• \"open calendar\" / \"create event\"\n• \"call 555-1234\" / \"send text to 555-1234\"\n• \"set alarm for 7am\" / \"set timer 5 minutes\"\n• \"search for weather\" / \"open google.com\"\n• \"navigate to coffee shop\" / \"show maps\"\n• \"send email to user@mail.com\"\n• \"share this text\" / \"copy hello\"\n• \"take a photo\" / \"record video\"\n• \"open wifi settings\" / \"open bluetooth settings\"\n\nTry saying:\n• \"open settings\"\n• \"what's on my screen?\"\n• \"set alarm for 8am\"","actions":[],"complete":true}"""
+                                """{"thought":"User needs help","response":"I'm NOMM (Nothing On My Mind), your on-device AI assistant! I can:\n\n• **See** what's on your screen\n• **Click** buttons and links\n• **Type** text in fields\n• **Scroll** through content\n• **Open apps** - try: Settings, Chrome, Messages, Phone, Clock\n• **Navigate** - go back, go home\n• **Remember** things you tell me\n\n📱 **Device Actions:**\n• \"open calendar\" / \"create event\"\n• \"call 555-1234\" / \"send text to 555-1234\"\n• \"set alarm for 7am\" / \"set timer 5 minutes\"\n• \"search for weather\" / \"open google.com\"\n• \"navigate to coffee shop\" / \"show maps\"\n• \"send email to user@mail.com\"\n• \"share this text\" / \"copy hello\"\n• \"open wifi settings\" / \"open bluetooth settings\"\n\nTry saying:\n• \"open settings\"\n• \"what's on my screen?\"\n• \"set alarm for 8am\"","actions":[],"complete":true}"""
                         }
 
                         // Calculator - might not be on emulator
@@ -2215,11 +2239,6 @@ JSON array:"""
                                 """{"thought":"Opening Contacts","response":"Opening Contacts","actions":[{"type":"open_app","app":"Contacts"}],"complete":true}"""
                         }
 
-                        // Camera
-                        lowerMessage.contains("camera") || lowerMessage.contains("photo") -> {
-                                """{"thought":"Opening Camera","response":"Opening Camera","actions":[{"type":"open_app","app":"Camera"}],"complete":true}"""
-                        }
-
                         // Clock/Alarm
                         lowerMessage.contains("clock") ||
                                 lowerMessage.contains("alarm") ||
@@ -2257,7 +2276,14 @@ JSON array:"""
                                                         lowerMessage,
                                                         listOf("event", "meeting", "schedule")
                                                 )
-                                """{"thought":"Creating calendar event","response":"Creating a calendar event: $title","actions":[{"type":"open_calendar","title":"$title"}],"complete":true}"""
+                                // Extract date and time from user message
+                                val dateInfo = extractDateFromMessage(lowerMessage)
+                                val timeInfo = extractTimeFromMessage(lowerMessage)
+                                val dateField =
+                                        if (dateInfo != null) ""","date":"$dateInfo"""" else ""
+                                val timeField =
+                                        if (timeInfo != null) ""","time":"$timeInfo"""" else ""
+                                """{"thought":"Creating calendar event","response":"Creating a calendar event: $title","actions":[{"type":"open_calendar","title":"$title"$dateField$timeField}],"complete":true}"""
                         }
 
                         // Dial/Call actions
@@ -2385,22 +2411,6 @@ JSON array:"""
                                 """{"thought":"Opening share dialog","response":"Opening share dialog","actions":[{"type":"share","text":"$textToShare"}],"complete":true}"""
                         }
 
-                        // Camera
-                        lowerMessage.contains("take a photo") ||
-                                lowerMessage.contains("take photo") ||
-                                lowerMessage.contains("take picture") ||
-                                (lowerMessage.contains("camera") &&
-                                        !lowerMessage.contains("open")) -> {
-                                """{"thought":"Opening camera","response":"Opening camera to take a photo","actions":[{"type":"camera"}],"complete":true}"""
-                        }
-
-                        // Video
-                        lowerMessage.contains("record video") ||
-                                lowerMessage.contains("take video") ||
-                                lowerMessage.contains("video camera") -> {
-                                """{"thought":"Opening video camera","response":"Opening camera to record video","actions":[{"type":"video"}],"complete":true}"""
-                        }
-
                         // Play music/media
                         lowerMessage.contains("play ") &&
                                 (lowerMessage.contains("music") ||
@@ -2503,6 +2513,108 @@ JSON array:"""
                 val emailPattern = """[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"""
                 val match = emailPattern.toRegex().find(message)
                 return match?.value
+        }
+
+        /** Extract date from message for calendar events */
+        private fun extractDateFromMessage(message: String): String? {
+                val lowerMessage = message.lowercase()
+
+                // Check for relative dates first
+                when {
+                        lowerMessage.contains("today") -> return "today"
+                        lowerMessage.contains("tomorrow") -> return "tomorrow"
+                        lowerMessage.contains("next week") -> return "next monday"
+                }
+
+                // Check for "next [day]" pattern
+                val nextDayMatch =
+                        Regex(
+                                        """next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)"""
+                                )
+                                .find(lowerMessage)
+                if (nextDayMatch != null) {
+                        return nextDayMatch.value
+                }
+
+                // Check for day names (this week)
+                val dayMatch =
+                        Regex(
+                                        """(?:on\s+|this\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)"""
+                                )
+                                .find(lowerMessage)
+                if (dayMatch != null) {
+                        return dayMatch.groupValues[1]
+                }
+
+                // Check for ISO date format (YYYY-MM-DD)
+                val isoMatch = Regex("""\d{4}-\d{2}-\d{2}""").find(lowerMessage)
+                if (isoMatch != null) {
+                        return isoMatch.value
+                }
+
+                // Check for US date format (MM/DD/YYYY or M/D/YY)
+                val usDateMatch = Regex("""\d{1,2}/\d{1,2}/\d{2,4}""").find(lowerMessage)
+                if (usDateMatch != null) {
+                        return usDateMatch.value
+                }
+
+                // Check for month name patterns (Dec 25, December 25th, 25th December)
+                val monthNames =
+                        "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+                val monthDayMatch =
+                        Regex(
+                                        """($monthNames)\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{4}))?""",
+                                        RegexOption.IGNORE_CASE
+                                )
+                                .find(message)
+                if (monthDayMatch != null) {
+                        return monthDayMatch.value
+                }
+
+                // Check for day month pattern (25th December, 25 Dec)
+                val dayMonthMatch =
+                        Regex(
+                                        """(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?($monthNames)(?:\s*,?\s*(\d{4}))?""",
+                                        RegexOption.IGNORE_CASE
+                                )
+                                .find(message)
+                if (dayMonthMatch != null) {
+                        return dayMonthMatch.value
+                }
+
+                return null
+        }
+
+        /** Extract time from message for calendar events */
+        private fun extractTimeFromMessage(message: String): String? {
+                val lowerMessage = message.lowercase()
+
+                // Check for time patterns
+                // "at 2pm", "at 2:30 pm", "at 14:00", "2:30pm"
+                val timePatterns =
+                        listOf(
+                                """(?:at\s+)?(\d{1,2}):(\d{2})\s*(am|pm)?""", // 2:30 pm, 14:00
+                                """(?:at\s+)?(\d{1,2})\s*(am|pm)""" // 2pm, 2 pm
+                        )
+
+                for (pattern in timePatterns) {
+                        val match = Regex(pattern, RegexOption.IGNORE_CASE).find(lowerMessage)
+                        if (match != null) {
+                                return match.value.removePrefix("at ").removePrefix("at").trim()
+                        }
+                }
+
+                // Check for relative times
+                when {
+                        lowerMessage.contains("noon") -> return "12:00"
+                        lowerMessage.contains("midnight") -> return "00:00"
+                        lowerMessage.contains("morning") -> return "9:00"
+                        lowerMessage.contains("afternoon") -> return "14:00"
+                        lowerMessage.contains("evening") -> return "18:00"
+                        lowerMessage.contains("night") -> return "20:00"
+                }
+
+                return null
         }
 
         /** Extract URL from message */
@@ -2707,7 +2819,34 @@ JSON array:"""
                                                                                 ?: 1000
                                                                 )
                                                         // Device Intent Actions
-                                                        "open_calendar" ->
+                                                        "open_calendar" -> {
+                                                                // Parse date/time strings into
+                                                                // milliseconds
+                                                                val dateStr =
+                                                                        actionObj.get("date")
+                                                                                ?.asString
+                                                                val timeStr =
+                                                                        actionObj.get("time")
+                                                                                ?.asString
+                                                                val durationMinutes =
+                                                                        actionObj.get(
+                                                                                        "duration_minutes"
+                                                                                )
+                                                                                ?.asInt
+                                                                                ?: 60
+                                                                val startTimeMillis =
+                                                                        parseEventDateTime(
+                                                                                dateStr,
+                                                                                timeStr
+                                                                        )
+                                                                val endTimeMillis =
+                                                                        startTimeMillis?.let {
+                                                                                it +
+                                                                                        (durationMinutes *
+                                                                                                60 *
+                                                                                                1000L)
+                                                                        }
+
                                                                 AIAction.OpenCalendar(
                                                                         title =
                                                                                 actionObj.get(
@@ -2724,17 +2863,10 @@ JSON array:"""
                                                                                                 "location"
                                                                                         )
                                                                                         ?.asString,
-                                                                        startTime =
-                                                                                actionObj.get(
-                                                                                                "start_time"
-                                                                                        )
-                                                                                        ?.asLong,
-                                                                        endTime =
-                                                                                actionObj.get(
-                                                                                                "end_time"
-                                                                                        )
-                                                                                        ?.asLong
+                                                                        startTime = startTimeMillis,
+                                                                        endTime = endTimeMillis
                                                                 )
+                                                        }
                                                         "dial" ->
                                                                 AIAction.DialNumber(
                                                                         phoneNumber =
@@ -2907,10 +3039,6 @@ JSON array:"""
                                                                                         )
                                                                                         ?.asString
                                                                 )
-                                                        "camera" ->
-                                                                AIAction.CaptureMedia(video = false)
-                                                        "video" ->
-                                                                AIAction.CaptureMedia(video = true)
                                                         "settings" ->
                                                                 AIAction.OpenSettings(
                                                                         section =
@@ -3078,17 +3206,34 @@ JSON array:"""
          * Uses the onToken callback from Cactus SDK to emit tokens as they're generated.
          *
          * @param focusRegion Optional focus region to limit AI attention to a specific screen area
+         * @param useCloudInference If true, use cloud inference for faster results (requires
+         * cactusToken)
+         * @param cactusToken API token for cloud inference
          */
         override fun generateSuggestionsStreaming(
                 screenState: ScreenState,
                 maxSuggestions: Int,
-                focusRegion: FocusRegion?
+                focusRegion: FocusRegion?,
+                useCloudInference: Boolean,
+                cactusToken: String?
         ): kotlinx.coroutines.flow.Flow<SuggestionStreamEvent> = callbackFlow {
                 try {
-                        if (!isModelLoaded) {
+                        // For cloud inference, we don't need a local model loaded
+                        if (!useCloudInference && !isModelLoaded) {
                                 trySend(
                                         SuggestionStreamEvent.Error(
                                                 "Model not loaded. Call loadModel() first."
+                                        )
+                                )
+                                close()
+                                return@callbackFlow
+                        }
+
+                        // Validate cloud token if using cloud inference
+                        if (useCloudInference && cactusToken.isNullOrBlank()) {
+                                trySend(
+                                        SuggestionStreamEvent.Error(
+                                                "Cloud token required for fast forward. Set it in Model Settings."
                                         )
                                 )
                                 close()
@@ -3104,17 +3249,19 @@ JSON array:"""
                                 }
 
                         val focusInfo = if (focusRegion != null) " [FOCUS AREA ACTIVE]" else ""
+                        val inferenceMode = if (useCloudInference) "☁️ CLOUD" else "📱 LOCAL"
                         Log.d(
                                 TAG,
-                                "Starting streaming suggestion generation for: ${screenState.packageName}$focusInfo"
+                                "Starting $inferenceMode streaming suggestion generation for: ${screenState.packageName}$focusInfo"
                         )
 
                         DebugLogManager.info(
                                 TAG,
-                                "Starting streaming suggestion generation",
+                                "Starting $inferenceMode streaming suggestion generation",
                                 "App: ${screenState.packageName}\n" +
                                         "Max suggestions: $maxSuggestions\n" +
-                                        "Focus region: ${focusRegion?.bounds ?: "Full screen"}"
+                                        "Focus region: ${focusRegion?.bounds ?: "Full screen"}\n" +
+                                        "Inference mode: $inferenceMode"
                         )
 
                         if (!cactusAvailable || cactusLM == null) {
@@ -3137,13 +3284,17 @@ JSON array:"""
 
                         DebugLogManager.prompt(
                                 TAG,
-                                "Streaming AI prompt for suggestions",
+                                "$inferenceMode AI prompt for suggestions",
                                 "Prompt length: ${suggestionPrompt.length} chars"
                         )
 
                         val cactusMessages =
                                 listOf(CactusChatMessage(content = suggestionPrompt, role = "user"))
                         val fullResponse = StringBuilder()
+
+                        // Configure inference mode based on useCloudInference flag
+                        val mode =
+                                if (useCloudInference) InferenceMode.REMOTE else InferenceMode.LOCAL
 
                         // Generate completion with streaming via onToken callback
                         // Use mutex to prevent concurrent native library access (causes SIGSEGV)
@@ -3154,7 +3305,9 @@ JSON array:"""
                                                 params =
                                                         CactusCompletionParams(
                                                                 maxTokens = 400,
-                                                                temperature = 0.1
+                                                                temperature = 0.1,
+                                                                mode = mode,
+                                                                cactusToken = cactusToken
                                                         ),
                                                 onToken = { token, _ ->
                                                         fullResponse.append(token)
@@ -3172,7 +3325,7 @@ JSON array:"""
                         val responseContent = result?.response ?: fullResponse.toString()
                         DebugLogManager.response(
                                 TAG,
-                                "Streaming complete",
+                                "$inferenceMode streaming complete",
                                 "Response:\n$responseContent"
                         )
 
@@ -3232,13 +3385,13 @@ SCREEN:
 $screenContext
 
 Return ONLY a JSON array. Each object must have these exact fields:
-- "title": short action name with emoji (e.g. "📞 Call number")
+- "title": short action name (e.g. "Call number")
 - "description": one sentence explanation
-- "type": one of: dial, sms, search, maps, calendar, alarm, timer, email, camera, copy, share, settings_wifi, settings_bluetooth
+- "type": one of: dial, sms, search, maps, calendar, alarm, timer, email, copy, share, settings_wifi, settings_bluetooth
 - "value": the target (phone number, search query, address, etc.)
 
 Example response format:
-[{"title":"📞 Call 07483225245","description":"Dial this phone number","type":"dial","value":"07483225245"}]
+[{"title":"Call 07483225245","description":"Dial this phone number","type":"dial","value":"07483225245"}]
 
 JSON array:"""
         }
@@ -3384,16 +3537,16 @@ JSON array:"""
 Suggest $maxOptions helpful actions they can do with this text.
 
 Return ONLY a JSON array. Each object must have these exact fields:
-- "title": short action name with emoji (e.g. "📞 Call number", "🔍 Search web")
+- "title": short action name (e.g. "Call number", "Search web")
 - "description": one sentence explanation of what this action does
 - "type": one of: search, copy, share, dial, sms, email, maps, calendar, web, translate, define
 - "value": the relevant value extracted from text (phone number, address, search query, etc.)
 
 Examples:
-- If text is a phone number: [{"title":"📞 Call","description":"Dial this number","type":"dial","value":"555-1234"}]
-- If text is an address: [{"title":"🗺️ Open in Maps","description":"View location","type":"maps","value":"123 Main St"}]
-- If text is a name: [{"title":"🔍 Search","description":"Look up this person","type":"search","value":"John Smith"}]
-- If text is an email: [{"title":"✉️ Send Email","description":"Compose email","type":"email","value":"test@example.com"}]
+- If text is a phone number: [{"title":"Call","description":"Dial this number","type":"dial","value":"555-1234"}]
+- If text is an address: [{"title":"Open in Maps","description":"View location","type":"maps","value":"123 Main St"}]
+- If text is a name: [{"title":"Search","description":"Look up this person","type":"search","value":"John Smith"}]
+- If text is an email: [{"title":"Send Email","description":"Compose email","type":"email","value":"test@example.com"}]
 
 JSON array:"""
         }
@@ -3499,7 +3652,7 @@ JSON array:"""
                         val phone = match.value.replace(Regex("[\\s\\-\\(\\)]"), "")
                         options.add(
                                 TextOption(
-                                        title = "📞 Call $phone",
+                                        title = "Call $phone",
                                         description = "Dial this phone number",
                                         icon = TextOption.TextOptionIcon.PHONE,
                                         action = AIAction.DialNumber(phone)
@@ -3507,7 +3660,7 @@ JSON array:"""
                         )
                         options.add(
                                 TextOption(
-                                        title = "💬 Text $phone",
+                                        title = "Text $phone",
                                         description = "Send SMS to this number",
                                         icon = TextOption.TextOptionIcon.SMS,
                                         action = AIAction.SendSMS(phone, "")
@@ -3520,7 +3673,7 @@ JSON array:"""
                 emailPattern.find(text)?.let { match ->
                         options.add(
                                 TextOption(
-                                        title = "✉️ Email ${match.value}",
+                                        title = "Email ${match.value}",
                                         description = "Send an email to this address",
                                         icon = TextOption.TextOptionIcon.EMAIL,
                                         action = AIAction.SendEmail(match.value, null, null)
@@ -3533,7 +3686,7 @@ JSON array:"""
                 urlPattern.find(text)?.let { match ->
                         options.add(
                                 TextOption(
-                                        title = "🌐 Open Link",
+                                        title = "Open Link",
                                         description = "Open this URL in browser",
                                         icon = TextOption.TextOptionIcon.WEB,
                                         action = AIAction.OpenURL(match.value)
@@ -3561,7 +3714,7 @@ JSON array:"""
                 ) {
                         options.add(
                                 TextOption(
-                                        title = "🗺️ Open in Maps",
+                                        title = "Open in Maps",
                                         description = "View this location on maps",
                                         icon = TextOption.TextOptionIcon.MAP,
                                         action = AIAction.OpenMaps(query = text, navigate = false)
@@ -3569,7 +3722,7 @@ JSON array:"""
                         )
                         options.add(
                                 TextOption(
-                                        title = "🧭 Get Directions",
+                                        title = "Get Directions",
                                         description = "Navigate to this location",
                                         icon = TextOption.TextOptionIcon.MAP,
                                         action = AIAction.OpenMaps(query = text, navigate = true)
@@ -3591,7 +3744,7 @@ JSON array:"""
                 if (datePatterns.any { it.containsMatchIn(text) }) {
                         options.add(
                                 TextOption(
-                                        title = "📅 Add to Calendar",
+                                        title = "Add to Calendar",
                                         description = "Create a calendar event",
                                         icon = TextOption.TextOptionIcon.CALENDAR,
                                         action = AIAction.OpenCalendar(title = text)
@@ -3602,7 +3755,7 @@ JSON array:"""
                 // Always add these universal options
                 options.add(
                         TextOption(
-                                title = "🔍 Search Web",
+                                title = "Search Web",
                                 description =
                                         "Search for \"${text.take(30)}${if (text.length > 30) "..." else ""}\"",
                                 icon = TextOption.TextOptionIcon.SEARCH,
@@ -3612,7 +3765,7 @@ JSON array:"""
 
                 options.add(
                         TextOption(
-                                title = "📋 Copy Text",
+                                title = "Copy Text",
                                 description = "Copy to clipboard",
                                 icon = TextOption.TextOptionIcon.COPY,
                                 action = AIAction.CopyToClipboard(text)
@@ -3621,7 +3774,7 @@ JSON array:"""
 
                 options.add(
                         TextOption(
-                                title = "📤 Share",
+                                title = "Share",
                                 description = "Share this text",
                                 icon = TextOption.TextOptionIcon.SHARE,
                                 action = AIAction.ShareText(text)
@@ -3635,7 +3788,7 @@ JSON array:"""
                 ) {
                         options.add(
                                 TextOption(
-                                        title = "🌍 Translate",
+                                        title = "Translate",
                                         description = "Translate this text",
                                         icon = TextOption.TextOptionIcon.TRANSLATE,
                                         action = AIAction.WebSearch("translate $text")
@@ -3643,7 +3796,7 @@ JSON array:"""
                         )
                         options.add(
                                 TextOption(
-                                        title = "📖 Define",
+                                        title = "Define",
                                         description = "Look up definition",
                                         icon = TextOption.TextOptionIcon.DEFINE,
                                         action = AIAction.WebSearch("define $text")

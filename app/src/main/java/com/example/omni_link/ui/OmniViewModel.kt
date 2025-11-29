@@ -1,6 +1,7 @@
 package com.example.omni_link.ui
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,6 +10,8 @@ import com.example.omni_link.ai.ChatMessage
 import com.example.omni_link.ai.LLMProvider
 import com.example.omni_link.ai.MemoryItem
 import com.example.omni_link.ai.ModelManager
+import com.example.omni_link.ai.OpenRouterProvider
+import com.example.omni_link.ai.SemanticRAGEngine
 import com.example.omni_link.data.AIAction
 import com.example.omni_link.data.ActionResult
 import com.example.omni_link.data.FocusAreaSelectionState
@@ -19,6 +22,7 @@ import com.example.omni_link.data.SuggestionState
 import com.example.omni_link.data.db.MemoryRepository
 import com.example.omni_link.data.db.OmniLinkDatabase
 import com.example.omni_link.debug.DebugLogManager
+import com.example.omni_link.glyph.GlyphType
 import com.example.omni_link.service.OmniAccessibilityService
 import java.util.UUID
 import kotlinx.coroutines.Job
@@ -26,13 +30,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
-/** ViewModel for the Omni-Link AI Assistant */
+/** ViewModel for the NOMM (Nothing On My Mind) AI Assistant */
 class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "OmniViewModel"
-        private const val DEFAULT_MODEL = "qwen3-0.6" // Prefer an SDK slug by default
+        private const val DEFAULT_MODEL = "lfm2-350m" // LFM2 350M - fast & efficient
+
+        // SharedPreferences keys for settings
+        private const val PREFS_NAME = "omnilink_settings"
+        private const val KEY_OPENROUTER_MODEL = "openrouter_model"
     }
+
+    // SharedPreferences for persisting settings
+    private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     // Dependencies
     private val database = OmniLinkDatabase.getInstance(application)
@@ -40,6 +51,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     val modelManager = ModelManager(application)
     // Share the CactusLM instance from ModelManager so provider knows about downloaded models
     private val llmProvider: LLMProvider = CactusLLMProvider(application, modelManager.cactusLM)
+
+    // Semantic RAG Engine - uses Cactus SDK native embeddings for smart recall
+    private val semanticRAG = SemanticRAGEngine(database, modelManager.cactusLM)
 
     // Current session
     private val sessionId = UUID.randomUUID().toString()
@@ -71,6 +85,50 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // Suggestion overlay state
     private val _suggestionState = MutableStateFlow(SuggestionState())
     val suggestionState: StateFlow<SuggestionState> = _suggestionState.asStateFlow()
+
+    // Glyph type selection
+    private val _currentGlyphType = MutableStateFlow(GlyphType.MOBIUS_FIGURE_8)
+    val currentGlyphType: StateFlow<GlyphType> = _currentGlyphType.asStateFlow()
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // OPENROUTER CLOUD PROVIDER (for Fast Forward)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Load saved OpenRouter model
+    private fun loadSavedOpenRouterModel(): OpenRouterProvider.Model {
+        val savedModelId = prefs.getString(KEY_OPENROUTER_MODEL, null)
+        return if (savedModelId != null) {
+            OpenRouterProvider.Model.fromId(savedModelId) ?: OpenRouterProvider.Model.getDefault()
+        } else {
+            OpenRouterProvider.Model.getDefault()
+        }
+    }
+
+    // OpenRouter model selection (persisted)
+    private val _currentOpenRouterModel =
+            MutableStateFlow(
+                    loadSavedOpenRouterModel().also {
+                        // Sync with OpenRouterProvider
+                        OpenRouterProvider.setModel(it)
+                    }
+            )
+    val currentOpenRouterModel: StateFlow<OpenRouterProvider.Model> =
+            _currentOpenRouterModel.asStateFlow()
+
+    /** Check if OpenRouter is available (API key configured) */
+    fun isOpenRouterAvailable(): Boolean = OpenRouterProvider.isAvailable()
+
+    /** Set the OpenRouter model (persisted) */
+    fun setOpenRouterModel(model: OpenRouterProvider.Model) {
+        OpenRouterProvider.setModel(model)
+        _currentOpenRouterModel.value = model
+        prefs.edit().putString(KEY_OPENROUTER_MODEL, model.id).apply()
+        Log.d(TAG, "OpenRouter model changed to: ${model.displayName} (saved)")
+    }
+
+    /** Get available OpenRouter models */
+    fun getOpenRouterModels(): List<OpenRouterProvider.Model> =
+            OpenRouterProvider.getAvailableModels()
 
     // Track current suggestion generation job to cancel on new requests (prevents race conditions)
     private var suggestionGenerationJob: Job? = null
@@ -129,6 +187,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         // Text selection callbacks (Circle-to-Search)
         OmniAccessibilityService.onGenerateTextOptions = { generateTextOptions() }
         OmniAccessibilityService.onTextOptionSelected = { option -> executeTextOption(option) }
+
+        // Fast forward callback (cloud AI inference - OpenRouter/Gemini)
+        OmniAccessibilityService.onFastForward = { fastForwardSuggestions() }
     }
 
     /**
@@ -147,6 +208,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             val result = llmProvider.loadModel(downloadedSlug)
             if (result.isSuccess) {
                 Log.d(TAG, "Model loaded successfully: $downloadedSlug")
+                // Initialize semantic embeddings for RAG
+                initializeSemanticEmbeddings()
                 _uiState.update {
                     it.copy(
                             isLoading = false,
@@ -178,6 +241,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(statusMessage = "Loading ${modelFile.name}...") }
             val result = llmProvider.loadModel(modelFile.absolutePath)
             if (result.isSuccess) {
+                // Initialize semantic embeddings for RAG
+                initializeSemanticEmbeddings()
                 _uiState.update {
                     it.copy(
                             isLoading = false,
@@ -215,7 +280,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 ChatMessage(
                         role = ChatMessage.Role.ASSISTANT,
                         content =
-                                "👋 Hi! I'm Omni, your on-device AI assistant.\n\n" +
+                                "👋 Hi! I'm NOMM (Nothing On My Mind), your on-device AI assistant.\n\n" +
                                         "**No model is loaded.** Please download a model from the Model Settings (brain icon) to start using AI.\n\n" +
                                         "📱 *Also make sure Accessibility Service is enabled!*"
                 )
@@ -274,6 +339,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     /** Download a Cactus SDK model (by slug) - supports simultaneous downloads */
     fun downloadCactusModel(slug: String, autoLoad: Boolean = true) {
         viewModelScope.launch {
+            // Check if model is already downloaded - skip download if present
+            val isAlreadyDownloaded = cactusModels.value.firstOrNull { it.slug == slug }?.isDownloaded == true
+            if (isAlreadyDownloaded) {
+                Log.d(TAG, "Model $slug is already downloaded, skipping download")
+                // If autoLoad is requested, just load the existing model
+                if (autoLoad && !uiState.value.isModelReady) {
+                    selectCactusModel(slug)
+                }
+                return@launch
+            }
+
             modelManager.downloadCactusModel(slug).collect { state ->
                 // Only update global state if this is the first/only download
                 val activeCount = activeDownloads.value.count { it.value.isDownloading }
@@ -377,6 +453,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
             val result = llmProvider.loadModel(slug)
             if (result.isSuccess) {
+                // Initialize semantic embeddings for RAG
+                initializeSemanticEmbeddings()
                 _uiState.update {
                     it.copy(
                             isModelReady = true,
@@ -407,6 +485,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             val userMessage = ChatMessage(role = ChatMessage.Role.USER, content = text)
             addMessage(userMessage)
             memoryRepository.saveMessage("USER", text, sessionId)
+
+            // Check if this is a recall/memory search query
+            if (isRecallQuery(text)) {
+                _uiState.update { it.copy(isThinking = true) }
+                try {
+                    handleSmartRecall(text)
+                } finally {
+                    _uiState.update { it.copy(isThinking = false) }
+                }
+                return@launch
+            }
 
             // Show thinking state
             _uiState.update { it.copy(isThinking = true) }
@@ -560,8 +649,6 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             is AIAction.OpenMaps ->
                     if (action.navigate) "Starting navigation..." else "Opening maps..."
             is AIAction.PlayMedia -> "Playing media..."
-            is AIAction.CaptureMedia ->
-                    if (action.video) "Opening video camera..." else "Opening camera..."
             is AIAction.OpenSettings -> "Opening ${action.section.name.lowercase()} settings..."
             else -> "Processing..."
         }
@@ -590,6 +677,166 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // SEMANTIC RAG - SMART MEMORY RECALL
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Initialize semantic embeddings after model is loaded */
+    private suspend fun initializeSemanticEmbeddings() {
+        try {
+            val embeddingsReady = semanticRAG.initializeEmbeddings()
+            if (embeddingsReady) {
+                Log.d(TAG, "Semantic embeddings initialized - native RAG enabled")
+            } else {
+                Log.d(TAG, "Semantic embeddings not available - using TF-IDF fallback")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to initialize semantic embeddings", e)
+        }
+    }
+
+    /**
+     * Detect if a query is a recall/memory search command. Examples:
+     * - "recall: what was that recipe?"
+     * - "find: vacation planning stuff"
+     * - "search history: meeting notes"
+     * - "what did I copy about..."
+     * - "find similar to..."
+     */
+    private fun isRecallQuery(text: String): Boolean {
+        val lowerText = text.lowercase().trim()
+        return lowerText.startsWith("recall:") ||
+                lowerText.startsWith("recall ") ||
+                lowerText.startsWith("find:") ||
+                lowerText.startsWith("search history:") ||
+                lowerText.startsWith("search history ") ||
+                lowerText.contains("what did i copy") ||
+                lowerText.contains("what did i search") ||
+                lowerText.contains("what was that") ||
+                lowerText.contains("find similar") ||
+                lowerText.contains("what was i looking at") ||
+                lowerText.contains("what did i do") ||
+                (lowerText.contains("remember") && lowerText.contains("?"))
+    }
+
+    /** Extract the actual query from a recall command. */
+    private fun extractRecallQuery(text: String): String {
+        val lowerText = text.lowercase().trim()
+        return when {
+            lowerText.startsWith("recall:") -> text.substringAfter("recall:").trim()
+            lowerText.startsWith("recall ") -> text.substringAfter("recall ").trim()
+            lowerText.startsWith("find:") -> text.substringAfter("find:").trim()
+            lowerText.startsWith("search history:") -> text.substringAfter("search history:").trim()
+            lowerText.startsWith("search history ") -> text.substringAfter("search history ").trim()
+            else -> text
+        }
+    }
+
+    /**
+     * Handle a smart recall query using semantic search. Uses Cactus SDK native embeddings for
+     * semantic similarity.
+     */
+    private suspend fun handleSmartRecall(query: String) {
+        try {
+            val recallQuery = extractRecallQuery(query)
+            Log.d(TAG, "Smart recall query: $recallQuery")
+
+            val result = semanticRAG.smartRecall(recallQuery)
+
+            val searchMethod =
+                    if (result.usedSemanticSearch) "🧠 Semantic Search" else "📝 Keyword Search"
+            val responseText = buildString {
+                appendLine("**$searchMethod Results**\n")
+                appendLine(result.summary)
+                if (result.usedSemanticSearch) {
+                    appendLine("\n---")
+                    appendLine("_Using native Cactus SDK embeddings for semantic matching_")
+                }
+            }
+
+            val assistantMessage =
+                    ChatMessage(role = ChatMessage.Role.ASSISTANT, content = responseText)
+            addMessage(assistantMessage)
+            memoryRepository.saveMessage("ASSISTANT", responseText, sessionId)
+        } catch (e: Exception) {
+            Log.e(TAG, "Smart recall error", e)
+            val errorMessage =
+                    ChatMessage(
+                            role = ChatMessage.Role.ASSISTANT,
+                            content = "Sorry, I couldn't search your history: ${e.message}"
+                    )
+            addMessage(errorMessage)
+        }
+    }
+
+    /**
+     * Public method to perform smart memory recall from the chat. Use cases:
+     * - "recall: what was that cooking website?"
+     * - "find: things about my vacation"
+     * - "search history: meeting notes"
+     */
+    fun smartRecall(query: String) {
+        viewModelScope.launch {
+            // Add user message
+            val userMessage = ChatMessage(role = ChatMessage.Role.USER, content = query)
+            addMessage(userMessage)
+            memoryRepository.saveMessage("USER", query, sessionId)
+
+            _uiState.update { it.copy(isThinking = true) }
+            try {
+                handleSmartRecall(query)
+            } finally {
+                _uiState.update { it.copy(isThinking = false) }
+            }
+        }
+    }
+
+    /** Find content similar to the given text using semantic embeddings. */
+    fun findSimilar(text: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isThinking = true) }
+            try {
+                val similar = semanticRAG.findSimilar(text, limit = 8)
+
+                val responseText =
+                        if (similar.isEmpty()) {
+                            "I couldn't find anything similar to that in your history."
+                        } else {
+                            buildString {
+                                appendLine("**🔍 Similar Content Found:**\n")
+                                for (item in similar) {
+                                    val similarity = (item.similarity * 100).toInt()
+                                    appendLine("• **${item.title}** ($similarity% match)")
+                                    appendLine(
+                                            "  ${item.preview.take(100)}${if (item.preview.length > 100) "..." else ""}"
+                                    )
+                                    appendLine()
+                                }
+                            }
+                        }
+
+                addMessage(ChatMessage(role = ChatMessage.Role.ASSISTANT, content = responseText))
+            } catch (e: Exception) {
+                Log.e(TAG, "Find similar error", e)
+                addMessage(
+                        ChatMessage(
+                                role = ChatMessage.Role.ASSISTANT,
+                                content =
+                                        "Sorry, I couldn't search for similar content: ${e.message}"
+                        )
+                )
+            } finally {
+                _uiState.update { it.copy(isThinking = false) }
+            }
+        }
+    }
+
+    /** Get embedding cache statistics for debugging. */
+    suspend fun getEmbeddingStats(): String {
+        val stats = semanticRAG.getCacheStats()
+        return "Embeddings: ${if (stats.embeddingsAvailable) "Active" else "Inactive"}, Cache: ${stats.size}/${stats.maxSize}"
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // SUGGESTION OVERLAY METHODS
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -608,7 +855,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                     error = "No AI model loaded. Please download a model first.",
                                     suggestions = emptyList(),
                                     streamingText = "",
-                                    isStreaming = false
+                                    isStreaming = false,
+                                    canUseFastForward = true // Gemini is always available
                             )
                         }
                         return@launch
@@ -624,7 +872,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                             "Cannot capture screen. Make sure accessibility service is enabled.",
                                     suggestions = emptyList(),
                                     streamingText = "",
-                                    isStreaming = false
+                                    isStreaming = false,
+                                    canUseFastForward = true
                             )
                         }
                         return@launch
@@ -640,6 +889,7 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                             }
 
                     // Show loading state with streaming enabled
+                    // Store the screen state so fast forward can use the same context
                     _suggestionState.update {
                         it.copy(
                                 isVisible = true,
@@ -647,12 +897,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                 isStreaming = true,
                                 streamingText = "",
                                 error = null,
-                                lastScreenContext = screenContext
+                                lastScreenContext = screenContext,
+                                lastScreenState = currentScreen, // Save for fast forward to use
+                                isCloudInferenceActive = false,
+                                canUseFastForward = true // Fast forward always available
                         )
                     }
 
                     try {
-                        // Use streaming generation with focus region awareness
+                        // Use streaming generation with focus region awareness (local inference)
                         llmProvider.generateSuggestionsStreaming(
                                         currentScreen,
                                         maxSuggestions = 5,
@@ -670,19 +923,21 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                             // Generation complete
                                             Log.d(
                                                     TAG,
-                                                    "Generated ${event.suggestions.size} suggestions"
+                                                    "Generated ${event.suggestions.size} suggestions via 📱 local"
                                             )
                                             _suggestionState.update {
                                                 it.copy(
                                                         isLoading = false,
                                                         isStreaming = false,
+                                                        isCloudInferenceActive = false,
                                                         suggestions =
                                                                 event.suggestions
                                                                         .sortedByDescending { s ->
                                                                             s.priority
                                                                         },
                                                         error = null,
-                                                        streamingText = ""
+                                                        streamingText = "",
+                                                        canUseFastForward = true
                                                 )
                                             }
                                         }
@@ -695,9 +950,11 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                                                 it.copy(
                                                         isLoading = false,
                                                         isStreaming = false,
+                                                        isCloudInferenceActive = false,
                                                         error = event.message,
                                                         suggestions = emptyList(),
-                                                        streamingText = ""
+                                                        streamingText = "",
+                                                        canUseFastForward = true
                                                 )
                                             }
                                         }
@@ -709,14 +966,158 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                             it.copy(
                                     isLoading = false,
                                     isStreaming = false,
+                                    isCloudInferenceActive = false,
                                     error = e.message ?: "Failed to generate suggestions",
                                     suggestions = emptyList(),
-                                    streamingText = ""
+                                    streamingText = "",
+                                    canUseFastForward = true
                             )
                         }
                     }
                 }
     }
+
+    /** Fast forward: Use OpenRouter cloud AI for ultra-fast inference */
+    fun fastForwardSuggestions() {
+        // Cancel any previous suggestion generation
+        suggestionGenerationJob?.cancel()
+
+        suggestionGenerationJob =
+                viewModelScope.launch {
+                    val model = _currentOpenRouterModel.value
+                    val providerName = "OpenRouter (${model.displayName})"
+
+                    Log.d(TAG, "⚡ Fast forward triggered - using $providerName")
+                    DebugLogManager.info(
+                            TAG,
+                            "Fast Forward 🌐",
+                            "Using $providerName for instant results"
+                    )
+
+                    // Use the stored screen state from local inference instead of re-capturing
+                    // This ensures fast forward analyzes the SAME screen as local inference
+                    val storedScreen = _suggestionState.value.lastScreenState
+                    val currentScreen =
+                            storedScreen ?: OmniAccessibilityService.instance?.captureScreen()
+
+                    // Debug logging for screen capture
+                    if (currentScreen != null) {
+                        val elementCount = currentScreen.flattenElements().size
+                        val sourceNote =
+                                if (storedScreen != null)
+                                        "(using stored screen from local inference)"
+                                else "(freshly captured)"
+                        Log.d(
+                                TAG,
+                                "⚡ Fast forward screen: ${currentScreen.packageName}, ${elementCount} elements $sourceNote"
+                        )
+                        DebugLogManager.info(
+                                TAG,
+                                "Fast Forward Screen Context",
+                                "Source: ${if (storedScreen != null) "Stored from local inference" else "Freshly captured"}\n" +
+                                        "App: ${currentScreen.packageName}\n" +
+                                        "Activity: ${currentScreen.activityName ?: "unknown"}\n" +
+                                        "Elements: $elementCount\n" +
+                                        "Context preview: ${currentScreen.toPromptContext().take(300)}..."
+                        )
+                    }
+                    if (currentScreen == null) {
+                        _suggestionState.update {
+                            it.copy(
+                                    isLoading = false,
+                                    isStreaming = false,
+                                    isCloudInferenceActive = false,
+                                    error = "Cannot capture screen",
+                                    canUseFastForward = true
+                            )
+                        }
+                        return@launch
+                    }
+
+                    val focusRegion = _suggestionState.value.focusRegion
+
+                    // Show cloud loading state
+                    _suggestionState.update {
+                        it.copy(
+                                isVisible = true,
+                                isLoading = true,
+                                isStreaming = false,
+                                streamingText = "🌐 Fast Forward via $providerName...",
+                                isCloudInferenceActive = true,
+                                canUseFastForward = false,
+                                error = null
+                        )
+                    }
+
+                    try {
+                        // Use OpenRouter for cloud inference
+                        val suggestionsFlow =
+                                OpenRouterProvider.generateSuggestionsStreaming(
+                                        currentScreen,
+                                        maxSuggestions = 5,
+                                        focusRegion = focusRegion
+                                )
+
+                        suggestionsFlow.collect { event ->
+                            when (event) {
+                                is com.example.omni_link.ai.SuggestionStreamEvent.Token -> {
+                                    _suggestionState.update {
+                                        it.copy(streamingText = event.fullText)
+                                    }
+                                }
+                                is com.example.omni_link.ai.SuggestionStreamEvent.Complete -> {
+                                    Log.d(
+                                            TAG,
+                                            "🌐 Fast Forward complete: ${event.suggestions.size} suggestions"
+                                    )
+                                    _suggestionState.update {
+                                        it.copy(
+                                                isLoading = false,
+                                                isStreaming = false,
+                                                isCloudInferenceActive = false,
+                                                suggestions =
+                                                        event.suggestions.sortedByDescending { s ->
+                                                            s.priority
+                                                        },
+                                                error = null,
+                                                streamingText = "",
+                                                canUseFastForward = true
+                                        )
+                                    }
+                                }
+                                is com.example.omni_link.ai.SuggestionStreamEvent.Error -> {
+                                    Log.e(TAG, "Fast Forward failed: ${event.message}")
+                                    _suggestionState.update {
+                                        it.copy(
+                                                isLoading = false,
+                                                isStreaming = false,
+                                                isCloudInferenceActive = false,
+                                                error = "Cloud error: ${event.message}",
+                                                streamingText = "",
+                                                canUseFastForward = true
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Fast Forward error", e)
+                        _suggestionState.update {
+                            it.copy(
+                                    isLoading = false,
+                                    isStreaming = false,
+                                    isCloudInferenceActive = false,
+                                    error = "Cloud error: ${e.message}",
+                                    streamingText = "",
+                                    canUseFastForward = true
+                            )
+                        }
+                    }
+                }
+    }
+
+    /** Check if fast forward is available (requires OpenRouter API key) */
+    fun isFastForwardAvailable(): Boolean = OpenRouterProvider.isAvailable()
 
     /** Execute a suggestion's action */
     fun executeSuggestion(suggestion: Suggestion) {
@@ -1042,24 +1443,46 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Floating overlay state - directly observe from accessibility service for proper syncing
+    // This ensures state is always in sync whether toggled from main app or accessibility shortcut
+    val floatingOverlayEnabled: StateFlow<Boolean> = OmniAccessibilityService.floatingOverlayEnabled
+
     /** Enable floating overlay button */
     fun enableFloatingOverlay() {
-        OmniAccessibilityService.instance?.showFloatingButton()
+        val service = OmniAccessibilityService.instance
+        if (service != null) {
+            service.showFloatingButton()
+            Log.d(TAG, "Floating overlay enabled")
+        } else {
+            Log.w(TAG, "Cannot enable overlay - accessibility service not running")
+        }
     }
 
     /** Disable floating overlay button */
     fun disableFloatingOverlay() {
-        OmniAccessibilityService.instance?.hideFloatingButton()
+        val service = OmniAccessibilityService.instance
+        if (service != null) {
+            service.hideFloatingButton()
+            Log.d(TAG, "Floating overlay disabled")
+        } else {
+            Log.w(TAG, "Cannot disable overlay - accessibility service not running")
+        }
     }
 
     /** Toggle floating overlay button */
     fun toggleFloatingOverlay() {
-        OmniAccessibilityService.instance?.toggleFloatingButton()
+        val service = OmniAccessibilityService.instance
+        if (service != null) {
+            service.toggleFloatingButton()
+            Log.d(TAG, "Floating overlay toggled: ${floatingOverlayEnabled.value}")
+        } else {
+            Log.w(TAG, "Cannot toggle overlay - accessibility service not running")
+        }
     }
 
     /** Check if floating overlay is enabled */
     fun isFloatingOverlayEnabled(): Boolean {
-        return OmniAccessibilityService.instance?.isFloatingOverlayEnabled() ?: false
+        return floatingOverlayEnabled.value
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1086,6 +1509,18 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         return OmniAccessibilityService.instance?.isDebugOverlayEnabled() ?: false
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GLYPH METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Set the current glyph type and update the accessibility service */
+    fun setGlyphType(type: GlyphType) {
+        _currentGlyphType.value = type
+        // Update the glyph helper in the accessibility service
+        OmniAccessibilityService.instance?.setGlyphType(type)
+        Log.d(TAG, "Glyph type changed to: ${type.displayName}")
+    }
+
     override fun onCleared() {
         super.onCleared()
         // Clear callbacks to prevent memory leaks
@@ -1101,6 +1536,8 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         // Clear text selection callbacks
         OmniAccessibilityService.onGenerateTextOptions = null
         OmniAccessibilityService.onTextOptionSelected = null
+        // Clear fast forward callback
+        OmniAccessibilityService.onFastForward = null
         viewModelScope.launch { llmProvider.unloadModel() }
     }
 }

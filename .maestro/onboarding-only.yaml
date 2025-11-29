@@ -1,0 +1,60 @@
+appId: com.example.omni_link
+name: Onboarding Screenshots Only
+---
+
+# =============================================================================
+# Quick capture of just the 4 onboarding screens
+# Run: maestro test .maestro/onboarding-only.yaml
+# =============================================================================
+
+- clearState
+- launchApp
+
+# Wait for first screen
+- assertVisible: "NOMM."
+- extendedWaitUntil:
+    visible: "Nothing On My Mind"
+    timeout: 5000
+
+# Let animation settle
+- scroll:
+    direction: DOWN  # No-op scroll just to wait
+
+- takeScreenshot: onboarding_01_welcome
+
+# Screen 2
+- swipe:
+    direction: LEFT
+    duration: 500
+
+- extendedWaitUntil:
+    visible: "ON-DEVICE AI"
+    timeout: 3000
+
+- takeScreenshot: onboarding_02_ondevice_ai
+
+# Screen 3
+- swipe:
+    direction: LEFT
+    duration: 500
+
+- extendedWaitUntil:
+    visible: "SCREEN-AWARE"
+    timeout: 3000
+
+- takeScreenshot: onboarding_03_screen_aware
+
+# Screen 4
+- swipe:
+    direction: LEFT
+    duration: 500
+
+- extendedWaitUntil:
+    visible: "GLYPH MATRIX"
+    timeout: 3000
+
+- takeScreenshot: onboarding_04_glyph_matrix
+
+- runScript:
+    script: |
+      console.log("✅ Onboarding screenshots captured!")

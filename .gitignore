@@ -13,3 +13,12 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 🔐 Release signing - NEVER commit these!
+keystore.properties
+*.keystore
+*.jks
+signing/
+
+# 🔑 API Keys - NEVER commit!
+secrets.properties

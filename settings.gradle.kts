@@ -21,6 +21,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "omni-link"
+rootProject.name = "nomm"
 include(":app")
- 

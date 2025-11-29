@@ -1,0 +1,30 @@
+# Nothing Phone 3 Essential Button Key Layout
+# OmniLink Custom Mapping
+#
+# This file remaps the Essential Button scancode to a keycode
+# that OmniLink's accessibility service can intercept.
+#
+# The Essential Button typically sends scancode 0x2bf (703)
+# We map it to KEYCODE_UNKNOWN (0) which our app detects.
+#
+# Alternative mappings you can use:
+# - KEYCODE_CAMERA (27) - if you want camera-like behavior
+# - KEYCODE_SEARCH (84) - for search-like behavior
+# - KEYCODE_ASSIST (219) - for assistant-like behavior
+# - KEYCODE_APP_SWITCH (187) - for app switcher
+
+# Primary Essential Button scancode mapping
+# Scancode 703 (0x2bf) -> KEYCODE_UNKNOWN
+key 703   UNKNOWN
+
+# Alternative scancodes that Nothing might use
+# Uncomment if the above doesn't work
+# key 704   UNKNOWN
+# key 705   UNKNOWN
+# key 706   UNKNOWN
+
+# Some devices use different scancodes
+# key 528   UNKNOWN
+# key 529   UNKNOWN
+
+

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <!--
+    OMNI Möbius - In-app branding icon
+    -->
+
+    <!-- Main infinity shape -->
+    <path
+        android:fillColor="#FF0000"
+        android:pathData="
+            M8,24
+            Q8,14 17,14
+            Q24,14 24,20
+            Q24,14 31,14
+            Q40,14 40,24
+            Q40,34 31,34
+            Q24,34 24,28
+            Q24,34 17,34
+            Q8,34 8,24
+            Z
+            M12,24
+            Q12,30 18,30
+            Q22,30 23,26
+            L25,26
+            Q26,30 30,30
+            Q36,30 36,24
+            Q36,18 30,18
+            Q26,18 25,22
+            L23,22
+            Q22,18 18,18
+            Q12,18 12,24
+            Z" />
+
+    <!-- Depth shading -->
+    <path
+        android:fillColor="#CC0000"
+        android:pathData="
+            M25,22
+            Q26,18 30,18
+            Q36,18 36,24
+            L40,24
+            Q40,14 31,14
+            Q24,14 24,20
+            Q24,18 23,19
+            L25,22
+            Z" />
+
+    <!-- Highlight -->
+    <path
+        android:fillColor="#FF4444"
+        android:pathData="
+            M8,24
+            Q8,14 17,14
+            Q20,14 22,16
+            L20,19
+            Q19,18 18,18
+            Q12,18 12,24
+            Q12,26 13,28
+            L10,28
+            Q8,26 8,24
+            Z" />
+
+</vector>
+
+
