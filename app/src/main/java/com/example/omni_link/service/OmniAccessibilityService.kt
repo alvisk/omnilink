@@ -7,6 +7,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -18,14 +19,17 @@ import android.provider.CalendarContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import android.view.Display
 import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -34,18 +38,23 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.example.omni_link.ai.TextOption
 import com.example.omni_link.data.AIAction
 import com.example.omni_link.data.ActionResult
 import com.example.omni_link.data.ScreenElement
 import com.example.omni_link.data.ScreenState
 import com.example.omni_link.data.Suggestion
 import com.example.omni_link.data.SuggestionState
+import com.example.omni_link.data.TextSelectionState
 import com.example.omni_link.debug.DebugLogManager
+import com.example.omni_link.ocr.TextRecognitionHelper
 import com.example.omni_link.ui.DebugFloatingButton
 import com.example.omni_link.ui.DebugOverlayPanel
 import com.example.omni_link.ui.FocusAreaSelectorOverlay
 import com.example.omni_link.ui.OmniFloatingButton
 import com.example.omni_link.ui.OmniOverlay
+import com.example.omni_link.ui.TextSelectionButton
+import com.example.omni_link.ui.TextSelectionOverlay
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -87,6 +96,22 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         var onFocusAreaSelectionEnd: (() -> Unit)? = null
         var onFocusAreaClear: (() -> Unit)? = null
         var onFocusAreaConfirm: (() -> Unit)? = null
+
+        // Text selection state for Circle-to-Search
+        private val _textSelectionState = MutableStateFlow(TextSelectionState())
+        val textSelectionState: StateFlow<TextSelectionState> = _textSelectionState
+
+        // Text selection callbacks
+        var onTextBlockTapped: ((Int) -> Unit)? = null
+        var onTextBlocksSelected: ((List<Int>) -> Unit)? = null
+        var onTextSelectionCopy: (() -> Unit)? = null
+        var onTextSelectionSearch: (() -> Unit)? = null
+        var onTextSelectionShare: (() -> Unit)? = null
+        var onTextSelectionDismiss: (() -> Unit)? = null
+
+        // Text option callbacks (Circle-to-Search AI options)
+        var onGenerateTextOptions: (() -> Unit)? = null
+        var onTextOptionSelected: ((TextOption) -> Unit)? = null
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -96,6 +121,10 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
     private var debugButtonView: FrameLayout? = null
     private var debugOverlayView: FrameLayout? = null
     private var focusAreaSelectorView: FrameLayout? = null
+    private var textSelectionOverlayView: FrameLayout? = null
+
+    // OCR helper for text recognition
+    private val textRecognitionHelper = TextRecognitionHelper()
 
     // Debounce job for screen capture - cancel previous job when new event arrives
     private var screenCaptureJob: Job? = null
@@ -1068,13 +1097,36 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                     setContent {
                         val suggestionState = _suggestionState.collectAsState()
 
-                        OmniFloatingButton(
-                                onClick = {
-                                    Log.d(TAG, "Floating button clicked")
-                                    onSuggestionButtonClicked?.invoke()
-                                },
-                                isLoading = suggestionState.value.isLoading
-                        )
+                        androidx.compose.foundation.layout.Column(
+                                verticalArrangement =
+                                        androidx.compose.foundation.layout.Arrangement.spacedBy(
+                                                8.dp
+                                        ),
+                                horizontalAlignment =
+                                        androidx.compose.ui.Alignment.CenterHorizontally
+                        ) {
+                            // Text selection button (smaller, cyan)
+                            TextSelectionButton(
+                                    onClick = {
+                                        Log.d(TAG, "Text selection button clicked")
+                                        DebugLogManager.info(
+                                                TAG,
+                                                "Text Selection Mode",
+                                                "Capturing screen for OCR..."
+                                        )
+                                        showTextSelectionOverlay()
+                                    }
+                            )
+
+                            // Main AI suggestions button (larger, red)
+                            OmniFloatingButton(
+                                    onClick = {
+                                        Log.d(TAG, "Floating button clicked")
+                                        onSuggestionButtonClicked?.invoke()
+                                    },
+                                    isLoading = suggestionState.value.isLoading
+                            )
+                        }
                     }
                 }
         container.addView(composeView)
@@ -1475,4 +1527,401 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
             showFloatingButton()
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TEXT SELECTION OVERLAY (Circle-to-Search) METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Take a screenshot and show the text selection overlay with OCR. This is the entry point for
+     * Circle-to-Search functionality.
+     */
+    fun showTextSelectionOverlay() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            captureScreenshotAndShowOverlay()
+        } else {
+            Log.w(TAG, "Text selection requires Android 11 (API 30) or higher")
+            DebugLogManager.error(TAG, "Text selection unavailable", "Requires Android 11+")
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun captureScreenshotAndShowOverlay() {
+        // Update state to processing
+        _textSelectionState.value = TextSelectionState(isActive = true, isProcessing = true)
+
+        // Hide floating button while capturing
+        floatingButtonView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing floating button for screenshot", e)
+            }
+        }
+        floatingButtonView = null
+
+        // Delay to ensure floating button is fully removed and screen is settled
+        serviceScope.launch {
+            delay(250)
+
+            takeScreenshot(
+                    Display.DEFAULT_DISPLAY,
+                    mainExecutor,
+                    object : TakeScreenshotCallback {
+                        override fun onSuccess(screenshot: ScreenshotResult) {
+                            try {
+                                val bitmap =
+                                        Bitmap.wrapHardwareBuffer(
+                                                screenshot.hardwareBuffer,
+                                                screenshot.colorSpace
+                                        )
+
+                                if (bitmap != null) {
+                                    Log.d(
+                                            TAG,
+                                            "Screenshot captured: ${bitmap.width}x${bitmap.height}, config: ${bitmap.config}"
+                                    )
+
+                                    // Convert to software bitmap for ML Kit processing
+                                    val softwareBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+
+                                    if (softwareBitmap != null) {
+                                        Log.d(
+                                                TAG,
+                                                "Software bitmap created: ${softwareBitmap.width}x${softwareBitmap.height}"
+                                        )
+                                        processScreenshotWithOCR(softwareBitmap)
+                                    } else {
+                                        Log.e(
+                                                TAG,
+                                                "Failed to convert hardware bitmap to software bitmap"
+                                        )
+                                        // Try alternative approach - create a new bitmap and draw
+                                        val altBitmap =
+                                                Bitmap.createBitmap(
+                                                        bitmap.width,
+                                                        bitmap.height,
+                                                        Bitmap.Config.ARGB_8888
+                                                )
+                                        val canvas = android.graphics.Canvas(altBitmap)
+                                        canvas.drawBitmap(bitmap, 0f, 0f, null)
+                                        Log.d(TAG, "Created alternative bitmap via canvas")
+                                        processScreenshotWithOCR(altBitmap)
+                                    }
+                                    bitmap.recycle()
+                                } else {
+                                    Log.e(
+                                            TAG,
+                                            "Failed to create bitmap from screenshot hardware buffer"
+                                    )
+                                    _textSelectionState.value =
+                                            _textSelectionState.value.copy(
+                                                    isProcessing = false,
+                                                    error = "Failed to capture screenshot"
+                                            )
+                                    restoreFloatingButton()
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error processing screenshot", e)
+                                _textSelectionState.value =
+                                        _textSelectionState.value.copy(
+                                                isProcessing = false,
+                                                error = "Screenshot processing error: ${e.message}"
+                                        )
+                                restoreFloatingButton()
+                            } finally {
+                                screenshot.hardwareBuffer.close()
+                            }
+                        }
+
+                        override fun onFailure(errorCode: Int) {
+                            Log.e(TAG, "Screenshot failed with error code: $errorCode")
+                            _textSelectionState.value =
+                                    _textSelectionState.value.copy(
+                                            isProcessing = false,
+                                            error = "Screenshot failed (code: $errorCode)"
+                                    )
+                            restoreFloatingButton()
+                        }
+                    }
+            )
+        }
+    }
+
+    private fun processScreenshotWithOCR(bitmap: Bitmap) {
+        serviceScope.launch {
+            try {
+                Log.d(
+                        TAG,
+                        "Processing screenshot with OCR: ${bitmap.width}x${bitmap.height}, config: ${bitmap.config}"
+                )
+                DebugLogManager.info(
+                        TAG,
+                        "OCR Processing",
+                        "Analyzing ${bitmap.width}x${bitmap.height} screenshot"
+                )
+
+                // Check if bitmap is valid
+                if (bitmap.isRecycled) {
+                    Log.e(TAG, "Bitmap is recycled!")
+                    throw IllegalStateException("Bitmap is recycled")
+                }
+
+                val textBlocks = textRecognitionHelper.recognizeText(bitmap)
+
+                Log.d(TAG, "OCR found ${textBlocks.size} text blocks")
+                if (textBlocks.isNotEmpty()) {
+                    textBlocks.take(5).forEach { block ->
+                        Log.d(TAG, "  Text: '${block.text}' at ${block.bounds}")
+                    }
+                }
+                DebugLogManager.success(
+                        TAG,
+                        "OCR Complete",
+                        "Found ${textBlocks.size} text elements"
+                )
+
+                // Update state with results
+                _textSelectionState.value =
+                        TextSelectionState(
+                                isActive = true,
+                                screenshotBitmap = bitmap,
+                                textBlocks = textBlocks,
+                                isProcessing = false
+                        )
+
+                // Show the text selection overlay
+                showTextSelectionOverlayUI()
+            } catch (e: Exception) {
+                Log.e(TAG, "OCR processing failed", e)
+                DebugLogManager.error(TAG, "OCR Failed", e.message ?: "Unknown error")
+
+                _textSelectionState.value =
+                        _textSelectionState.value.copy(
+                                isProcessing = false,
+                                error = "Text detection failed: ${e.message}"
+                        )
+                restoreFloatingButton()
+            }
+        }
+    }
+
+    private fun showTextSelectionOverlayUI() {
+        // Remove existing view without resetting state (state already has the text blocks)
+        textSelectionOverlayView?.let {
+            try {
+                windowManager?.removeView(it)
+                Log.d(TAG, "Text selection overlay removed for refresh")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing text selection overlay", e)
+            }
+        }
+        textSelectionOverlayView = null
+
+        val params =
+                WindowManager.LayoutParams(
+                                WindowManager.LayoutParams.MATCH_PARENT,
+                                WindowManager.LayoutParams.MATCH_PARENT,
+                                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                                PixelFormat.TRANSLUCENT
+                        )
+                        .apply { gravity = Gravity.TOP or Gravity.START }
+
+        val container =
+                FrameLayout(this).apply {
+                    setViewTreeLifecycleOwner(this@OmniAccessibilityService)
+                    setViewTreeSavedStateRegistryOwner(this@OmniAccessibilityService)
+                }
+
+        val composeView =
+                ComposeView(this).apply {
+                    setContent {
+                        val state = _textSelectionState.collectAsState()
+
+                        TextSelectionOverlay(
+                                state = state.value,
+                                onTextBlockTapped = { index ->
+                                    // Toggle selection of tapped block
+                                    val currentSelected = _textSelectionState.value.selectedBlocks
+                                    val newSelected =
+                                            if (currentSelected.contains(index)) {
+                                                currentSelected - index
+                                            } else {
+                                                currentSelected + index
+                                            }
+                                    _textSelectionState.value =
+                                            _textSelectionState.value.copy(
+                                                    selectedBlocks = newSelected,
+                                                    // Clear previous options when selection changes
+                                                    textOptions = emptyList(),
+                                                    optionsStreamingText = ""
+                                            )
+                                    onTextBlockTapped?.invoke(index)
+                                },
+                                onTextBlocksSelected = { indices ->
+                                    _textSelectionState.value =
+                                            _textSelectionState.value.copy(
+                                                    selectedBlocks = indices.toSet(),
+                                                    // Clear previous options when selection changes
+                                                    textOptions = emptyList(),
+                                                    optionsStreamingText = ""
+                                            )
+                                    onTextBlocksSelected?.invoke(indices)
+                                },
+                                onSelectionPathUpdate = { path ->
+                                    _textSelectionState.value =
+                                            _textSelectionState.value.copy(
+                                                    selectionPath = path,
+                                                    isDrawingSelection = true
+                                            )
+                                },
+                                onSelectionComplete = {
+                                    _textSelectionState.value =
+                                            _textSelectionState.value.copy(
+                                                    selectionPath = emptyList(),
+                                                    isDrawingSelection = false
+                                            )
+                                },
+                                onCopyText = {
+                                    val selectedText = _textSelectionState.value.getSelectedText()
+                                    if (selectedText.isNotEmpty()) {
+                                        copyToClipboard(selectedText)
+                                        DebugLogManager.success(
+                                                TAG,
+                                                "Text Copied",
+                                                selectedText.take(50) + "..."
+                                        )
+                                    }
+                                    onTextSelectionCopy?.invoke()
+                                },
+                                onSearchText = {
+                                    val selectedText = _textSelectionState.value.getSelectedText()
+                                    if (selectedText.isNotEmpty()) {
+                                        searchText(selectedText)
+                                        DebugLogManager.info(
+                                                TAG,
+                                                "Searching",
+                                                selectedText.take(50)
+                                        )
+                                    }
+                                    onTextSelectionSearch?.invoke()
+                                    hideTextSelectionOverlay()
+                                },
+                                onShareText = {
+                                    val selectedText = _textSelectionState.value.getSelectedText()
+                                    if (selectedText.isNotEmpty()) {
+                                        shareText(selectedText)
+                                    }
+                                    onTextSelectionShare?.invoke()
+                                    hideTextSelectionOverlay()
+                                },
+                                onDismiss = {
+                                    onTextSelectionDismiss?.invoke()
+                                    hideTextSelectionOverlay()
+                                }
+                        )
+                    }
+                }
+        container.addView(composeView)
+
+        textSelectionOverlayView = container
+        try {
+            windowManager?.addView(container, params)
+            Log.d(TAG, "Text selection overlay added")
+            DebugLogManager.info(TAG, "Text Selection Active", "Tap or circle text to select")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding text selection overlay", e)
+            textSelectionOverlayView = null
+        }
+    }
+
+    /** Hide the text selection overlay */
+    fun hideTextSelectionOverlay() {
+        textSelectionOverlayView?.let {
+            try {
+                windowManager?.removeView(it)
+                Log.d(TAG, "Text selection overlay removed")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing text selection overlay", e)
+            }
+        }
+        textSelectionOverlayView = null
+
+        // Recycle the bitmap if present
+        _textSelectionState.value.screenshotBitmap?.recycle()
+
+        // Reset state
+        _textSelectionState.value = TextSelectionState()
+
+        // Restore floating button
+        restoreFloatingButton()
+    }
+
+    private fun restoreFloatingButton() {
+        if (isFloatingOverlayEnabled && floatingButtonView == null) {
+            showFloatingButton()
+        }
+    }
+
+    /** Copy text to clipboard */
+    private fun copyToClipboard(text: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("Selected Text", text)
+        clipboard.setPrimaryClip(clip)
+    }
+
+    /** Search for text using the default search app */
+    private fun searchText(query: String) {
+        try {
+            val intent =
+                    Intent(Intent.ACTION_WEB_SEARCH).apply {
+                        putExtra(SearchManager.QUERY, query)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open search", e)
+            // Fallback to browser
+            try {
+                val browserIntent =
+                        Intent(Intent.ACTION_VIEW).apply {
+                            data = Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                startActivity(browserIntent)
+            } catch (e2: Exception) {
+                Log.e(TAG, "Failed to open browser for search", e2)
+            }
+        }
+    }
+
+    /** Share text using the system share sheet */
+    private fun shareText(text: String) {
+        try {
+            val intent =
+                    Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            startActivity(
+                    Intent.createChooser(intent, "Share text").apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to share text", e)
+        }
+    }
+
+    /** Update text selection state (called from ViewModel) */
+    fun updateTextSelectionState(state: TextSelectionState) {
+        _textSelectionState.value = state
+    }
+
+    /** Check if text selection overlay is active */
+    fun isTextSelectionActive(): Boolean = _textSelectionState.value.isActive
 }

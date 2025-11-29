@@ -87,6 +87,9 @@ dependencies {
     // 🌵 Cactus SDK - On-device LLM inference
     implementation("com.cactuscompute:cactus:1.2.0-beta")
 
+    // 🔍 ML Kit Text Recognition - for Circle-to-Search style OCR
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+
     // Room for persistent memory (Track 1: Memory Master)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)

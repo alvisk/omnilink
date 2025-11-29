@@ -21,6 +21,7 @@ import com.example.omni_link.data.db.OmniLinkDatabase
 import com.example.omni_link.debug.DebugLogManager
 import com.example.omni_link.service.OmniAccessibilityService
 import java.util.UUID
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -70,6 +71,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     // Suggestion overlay state
     private val _suggestionState = MutableStateFlow(SuggestionState())
     val suggestionState: StateFlow<SuggestionState> = _suggestionState.asStateFlow()
+
+    // Track current suggestion generation job to cancel on new requests (prevents race conditions)
+    private var suggestionGenerationJob: Job? = null
 
     init {
         // Refresh catalog and attempt to auto-load a downloaded model
@@ -121,6 +125,10 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         OmniAccessibilityService.onFocusAreaSelectionEnd = { onFocusAreaSelectionEnd() }
         OmniAccessibilityService.onFocusAreaClear = { clearFocusRegion() }
         OmniAccessibilityService.onFocusAreaConfirm = { confirmFocusArea() }
+
+        // Text selection callbacks (Circle-to-Search)
+        OmniAccessibilityService.onGenerateTextOptions = { generateTextOptions() }
+        OmniAccessibilityService.onTextOptionSelected = { option -> executeTextOption(option) }
     }
 
     /**
@@ -587,116 +595,127 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Generate suggestions based on current screen context with streaming output */
     fun generateSuggestions() {
-        viewModelScope.launch {
-            if (!uiState.value.isModelReady) {
-                _suggestionState.update {
-                    it.copy(
-                            isVisible = true,
-                            isLoading = false,
-                            error = "No AI model loaded. Please download a model first.",
-                            suggestions = emptyList(),
-                            streamingText = "",
-                            isStreaming = false
-                    )
-                }
-                return@launch
-            }
+        // Cancel any previous suggestion generation to prevent race conditions in native code
+        suggestionGenerationJob?.cancel()
 
-            val currentScreen = OmniAccessibilityService.instance?.captureScreen()
-            if (currentScreen == null) {
-                _suggestionState.update {
-                    it.copy(
-                            isVisible = true,
-                            isLoading = false,
-                            error =
-                                    "Cannot capture screen. Make sure accessibility service is enabled.",
-                            suggestions = emptyList(),
-                            streamingText = "",
-                            isStreaming = false
-                    )
-                }
-                return@launch
-            }
-
-            // Get the focus region if set
-            val focusRegion = _suggestionState.value.focusRegion
-            val screenContext =
-                    if (focusRegion != null) {
-                        currentScreen.toPromptContextWithFocus(focusRegion)
-                    } else {
-                        currentScreen.toPromptContext()
+        suggestionGenerationJob =
+                viewModelScope.launch {
+                    if (!uiState.value.isModelReady) {
+                        _suggestionState.update {
+                            it.copy(
+                                    isVisible = true,
+                                    isLoading = false,
+                                    error = "No AI model loaded. Please download a model first.",
+                                    suggestions = emptyList(),
+                                    streamingText = "",
+                                    isStreaming = false
+                            )
+                        }
+                        return@launch
                     }
 
-            // Show loading state with streaming enabled
-            _suggestionState.update {
-                it.copy(
-                        isVisible = true,
-                        isLoading = true,
-                        isStreaming = true,
-                        streamingText = "",
-                        error = null,
-                        lastScreenContext = screenContext
-                )
-            }
-
-            try {
-                // Use streaming generation with focus region awareness
-                llmProvider.generateSuggestionsStreaming(
-                                currentScreen,
-                                maxSuggestions = 5,
-                                focusRegion = focusRegion
-                        )
-                        .collect { event ->
-                            when (event) {
-                                is com.example.omni_link.ai.SuggestionStreamEvent.Token -> {
-                                    // Update streaming text as tokens arrive
-                                    _suggestionState.update {
-                                        it.copy(streamingText = event.fullText)
-                                    }
-                                }
-                                is com.example.omni_link.ai.SuggestionStreamEvent.Complete -> {
-                                    // Generation complete
-                                    Log.d(TAG, "Generated ${event.suggestions.size} suggestions")
-                                    _suggestionState.update {
-                                        it.copy(
-                                                isLoading = false,
-                                                isStreaming = false,
-                                                suggestions =
-                                                        event.suggestions.sortedByDescending { s ->
-                                                            s.priority
-                                                        },
-                                                error = null,
-                                                streamingText = ""
-                                        )
-                                    }
-                                }
-                                is com.example.omni_link.ai.SuggestionStreamEvent.Error -> {
-                                    Log.e(TAG, "Suggestion generation failed: ${event.message}")
-                                    _suggestionState.update {
-                                        it.copy(
-                                                isLoading = false,
-                                                isStreaming = false,
-                                                error = event.message,
-                                                suggestions = emptyList(),
-                                                streamingText = ""
-                                        )
-                                    }
-                                }
-                            }
+                    val currentScreen = OmniAccessibilityService.instance?.captureScreen()
+                    if (currentScreen == null) {
+                        _suggestionState.update {
+                            it.copy(
+                                    isVisible = true,
+                                    isLoading = false,
+                                    error =
+                                            "Cannot capture screen. Make sure accessibility service is enabled.",
+                                    suggestions = emptyList(),
+                                    streamingText = "",
+                                    isStreaming = false
+                            )
                         }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error generating suggestions", e)
-                _suggestionState.update {
-                    it.copy(
-                            isLoading = false,
-                            isStreaming = false,
-                            error = e.message ?: "Failed to generate suggestions",
-                            suggestions = emptyList(),
-                            streamingText = ""
-                    )
+                        return@launch
+                    }
+
+                    // Get the focus region if set
+                    val focusRegion = _suggestionState.value.focusRegion
+                    val screenContext =
+                            if (focusRegion != null) {
+                                currentScreen.toPromptContextWithFocus(focusRegion)
+                            } else {
+                                currentScreen.toPromptContext()
+                            }
+
+                    // Show loading state with streaming enabled
+                    _suggestionState.update {
+                        it.copy(
+                                isVisible = true,
+                                isLoading = true,
+                                isStreaming = true,
+                                streamingText = "",
+                                error = null,
+                                lastScreenContext = screenContext
+                        )
+                    }
+
+                    try {
+                        // Use streaming generation with focus region awareness
+                        llmProvider.generateSuggestionsStreaming(
+                                        currentScreen,
+                                        maxSuggestions = 5,
+                                        focusRegion = focusRegion
+                                )
+                                .collect { event ->
+                                    when (event) {
+                                        is com.example.omni_link.ai.SuggestionStreamEvent.Token -> {
+                                            // Update streaming text as tokens arrive
+                                            _suggestionState.update {
+                                                it.copy(streamingText = event.fullText)
+                                            }
+                                        }
+                                        is com.example.omni_link.ai.SuggestionStreamEvent.Complete -> {
+                                            // Generation complete
+                                            Log.d(
+                                                    TAG,
+                                                    "Generated ${event.suggestions.size} suggestions"
+                                            )
+                                            _suggestionState.update {
+                                                it.copy(
+                                                        isLoading = false,
+                                                        isStreaming = false,
+                                                        suggestions =
+                                                                event.suggestions
+                                                                        .sortedByDescending { s ->
+                                                                            s.priority
+                                                                        },
+                                                        error = null,
+                                                        streamingText = ""
+                                                )
+                                            }
+                                        }
+                                        is com.example.omni_link.ai.SuggestionStreamEvent.Error -> {
+                                            Log.e(
+                                                    TAG,
+                                                    "Suggestion generation failed: ${event.message}"
+                                            )
+                                            _suggestionState.update {
+                                                it.copy(
+                                                        isLoading = false,
+                                                        isStreaming = false,
+                                                        error = event.message,
+                                                        suggestions = emptyList(),
+                                                        streamingText = ""
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error generating suggestions", e)
+                        _suggestionState.update {
+                            it.copy(
+                                    isLoading = false,
+                                    isStreaming = false,
+                                    error = e.message ?: "Failed to generate suggestions",
+                                    suggestions = emptyList(),
+                                    streamingText = ""
+                            )
+                        }
+                    }
                 }
-            }
-        }
     }
 
     /** Execute a suggestion's action */
@@ -908,6 +927,121 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
     /** Get the current focus region */
     fun getFocusRegion(): FocusRegion? = _suggestionState.value.focusRegion
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TEXT SELECTION OPTIONS (Circle-to-Search)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Generate AI-powered options for the selected text from OCR */
+    private fun generateTextOptions() {
+        viewModelScope.launch {
+            val service = OmniAccessibilityService.instance ?: return@launch
+            val selectedText = OmniAccessibilityService.textSelectionState.value.getSelectedText()
+
+            if (selectedText.isBlank()) {
+                Log.w(TAG, "No text selected for option generation")
+                return@launch
+            }
+
+            Log.d(TAG, "Generating options for text: ${selectedText.take(50)}...")
+            DebugLogManager.info(TAG, "AI Options", "Generating for: ${selectedText.take(50)}...")
+
+            // Update state to show loading
+            service.updateTextSelectionState(
+                    OmniAccessibilityService.textSelectionState.value.copy(
+                            isGeneratingOptions = true,
+                            optionsStreamingText = "",
+                            textOptions = emptyList()
+                    )
+            )
+
+            try {
+                // Use the LLM provider to generate options with streaming
+                llmProvider.generateTextOptions(selectedText, maxOptions = 6).collect { event ->
+                    when (event) {
+                        is com.example.omni_link.ai.TextOptionStreamEvent.Token -> {
+                            // Update streaming text
+                            service.updateTextSelectionState(
+                                    OmniAccessibilityService.textSelectionState.value.copy(
+                                            optionsStreamingText = event.fullText
+                                    )
+                            )
+                        }
+                        is com.example.omni_link.ai.TextOptionStreamEvent.Complete -> {
+                            // Options generated
+                            Log.d(TAG, "Generated ${event.options.size} text options")
+                            DebugLogManager.success(
+                                    TAG,
+                                    "AI Options Ready",
+                                    "${event.options.size} options generated"
+                            )
+                            service.updateTextSelectionState(
+                                    OmniAccessibilityService.textSelectionState.value.copy(
+                                            isGeneratingOptions = false,
+                                            textOptions = event.options,
+                                            optionsStreamingText = ""
+                                    )
+                            )
+                        }
+                        is com.example.omni_link.ai.TextOptionStreamEvent.Error -> {
+                            Log.e(TAG, "Text options generation error: ${event.message}")
+                            DebugLogManager.error(TAG, "AI Options Failed", event.message)
+                            service.updateTextSelectionState(
+                                    OmniAccessibilityService.textSelectionState.value.copy(
+                                            isGeneratingOptions = false,
+                                            optionsStreamingText = "",
+                                            error = event.message
+                                    )
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error generating text options", e)
+                DebugLogManager.error(TAG, "AI Options Error", e.message ?: "Unknown error")
+                service.updateTextSelectionState(
+                        OmniAccessibilityService.textSelectionState.value.copy(
+                                isGeneratingOptions = false,
+                                optionsStreamingText = "",
+                                error = e.message
+                        )
+                )
+            }
+        }
+    }
+
+    /** Execute an action from a text option */
+    private fun executeTextOption(option: com.example.omni_link.ai.TextOption) {
+        viewModelScope.launch {
+            val service = OmniAccessibilityService.instance ?: return@launch
+
+            Log.d(TAG, "Executing text option: ${option.title}")
+            DebugLogManager.action(TAG, "Executing: ${option.title}", option.description)
+
+            // Hide the text selection overlay first
+            service.hideTextSelectionOverlay()
+
+            // Small delay to let UI update
+            delay(200)
+
+            // Execute the action
+            val result = service.executeAction(option.action)
+
+            when (result) {
+                is ActionResult.Success -> {
+                    Log.d(TAG, "Text option executed: ${result.description}")
+                    DebugLogManager.success(TAG, "Action Complete", result.description)
+                }
+                is ActionResult.Failure -> {
+                    Log.e(TAG, "Text option failed: ${result.reason}")
+                    DebugLogManager.error(TAG, "Action Failed", result.reason)
+                }
+                is ActionResult.NeedsConfirmation -> {
+                    Log.w(TAG, "Text option needs confirmation: ${result.reason}")
+                }
+            }
+        }
+    }
+
     /** Enable floating overlay button */
     fun enableFloatingOverlay() {
         OmniAccessibilityService.instance?.showFloatingButton()
@@ -964,6 +1098,9 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         OmniAccessibilityService.onFocusAreaSelectionEnd = null
         OmniAccessibilityService.onFocusAreaClear = null
         OmniAccessibilityService.onFocusAreaConfirm = null
+        // Clear text selection callbacks
+        OmniAccessibilityService.onGenerateTextOptions = null
+        OmniAccessibilityService.onTextOptionSelected = null
         viewModelScope.launch { llmProvider.unloadModel() }
     }
 }

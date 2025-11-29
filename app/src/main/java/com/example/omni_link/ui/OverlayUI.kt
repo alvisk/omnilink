@@ -4,7 +4,9 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -38,6 +40,7 @@ import kotlin.math.roundToInt
 @Composable
 fun OmniFloatingButton(
         onClick: () -> Unit,
+        onLongClick: () -> Unit = {},
         isLoading: Boolean = false,
         modifier: Modifier = Modifier
 ) {
@@ -71,22 +74,70 @@ fun OmniFloatingButton(
                     label = "rotation"
             )
 
+    // Long press threshold in milliseconds
+    val longPressTimeoutMs = 500L
+    // Drag threshold in pixels - if moved more than this, it's a drag not a tap
+    val dragThreshold = 10f
+
     Box(
             modifier =
                     modifier
                             .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                            .size(64.dp)
+                            // Custom gesture handler for tap, long-press, and drag
                             .pointerInput(Unit) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    offsetX += dragAmount.x
-                                    offsetY += dragAmount.y
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    val downTime = System.currentTimeMillis()
+                                    val startPosition = down.position
+                                    var totalDrag = androidx.compose.ui.geometry.Offset.Zero
+                                    var isDragging = false
+                                    var longPressTriggered = false
+
+                                    // Wait for up or track drag
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val currentTime = System.currentTimeMillis()
+                                        val elapsedTime = currentTime - downTime
+
+                                        // Check if all pointers are up
+                                        if (event.changes.all { !it.pressed }) {
+                                            // Pointer released
+                                            if (!isDragging && !longPressTriggered && elapsedTime < longPressTimeoutMs) {
+                                                // Short tap - trigger onClick
+                                                onClick()
+                                            }
+                                            break
+                                        }
+
+                                        // Track movement
+                                        val change = event.changes.firstOrNull() ?: continue
+                                        val dragAmount = change.position - change.previousPosition
+                                        totalDrag += dragAmount
+
+                                        // Check if this is a drag (moved beyond threshold)
+                                        val totalDistance = kotlin.math.sqrt(
+                                            totalDrag.x * totalDrag.x + totalDrag.y * totalDrag.y
+                                        )
+                                        if (totalDistance > dragThreshold) {
+                                            isDragging = true
+                                            // Apply drag offset
+                                            offsetX += dragAmount.x
+                                            offsetY += dragAmount.y
+                                            change.consume()
+                                        } else if (!isDragging && !longPressTriggered && elapsedTime >= longPressTimeoutMs) {
+                                            // Long press detected (and not dragging)
+                                            longPressTriggered = true
+                                            onLongClick()
+                                        }
+                                    }
                                 }
                             }
     ) {
         // Outer glow effect
         Box(
                 modifier =
-                        Modifier.size(64.dp)
+                        Modifier.fillMaxSize()
                                 .background(
                                         brush =
                                                 Brush.radialGradient(
@@ -103,9 +154,8 @@ fun OmniFloatingButton(
                                 )
         )
 
-        // Main button
+        // Main button - tap for suggestions, long-press for text selection
         Surface(
-                onClick = onClick,
                 modifier =
                         Modifier.size(56.dp)
                                 .align(Alignment.Center)
@@ -131,6 +181,45 @@ fun OmniFloatingButton(
                     ) { Box(modifier = Modifier.size(8.dp).background(OmniRed)) }
                 }
             }
+        }
+    }
+}
+
+/** Text selection floating button - triggers Circle-to-Search style OCR */
+@Composable
+fun TextSelectionButton(
+        onClick: () -> Unit,
+        modifier: Modifier = Modifier
+) {
+    // Subtle pulsing animation
+    val infiniteTransition = rememberInfiniteTransition(label = "text_pulse")
+    val pulseAlpha by
+            infiniteTransition.animateFloat(
+                    initialValue = 0.8f,
+                    targetValue = 1f,
+                    animationSpec =
+                            infiniteRepeatable(
+                                    animation = tween(1500, easing = EaseInOutCubic),
+                                    repeatMode = RepeatMode.Reverse
+                            ),
+                    label = "textPulseAlpha"
+            )
+
+    Surface(
+            onClick = onClick,
+            modifier = modifier.size(48.dp),
+            shape = RoundedCornerShape(8.dp),
+            color = OmniBlack.copy(alpha = pulseAlpha),
+            shadowElevation = 6.dp,
+            border = androidx.compose.foundation.BorderStroke(2.dp, OmniCyan)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                    imageVector = Icons.Outlined.TextFields,
+                    contentDescription = "Select text",
+                    tint = OmniCyan,
+                    modifier = Modifier.size(24.dp)
+            )
         }
     }
 }

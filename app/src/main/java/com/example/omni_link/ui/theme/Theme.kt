@@ -33,6 +33,7 @@ val OmniWhite = Color(0xFFFFFFFF) // Pure white text
 // Status Colors
 val OmniGreen = Color(0xFF00FF00) // Terminal green for success
 val OmniYellow = Color(0xFFFFFF00) // Bright yellow for warnings
+val OmniCyan = Color(0xFF00FFFF) // Cyan for text selection highlights
 
 // Message Colors
 val UserMessageBg = OmniGrayDark

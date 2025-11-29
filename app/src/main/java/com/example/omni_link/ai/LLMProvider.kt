@@ -50,6 +50,44 @@ interface LLMProvider {
             maxSuggestions: Int = 5,
             focusRegion: FocusRegion? = null
     ): Flow<SuggestionStreamEvent>
+
+    /**
+     * Generate contextual options/actions for selected text from OCR.
+     * This is used for Circle-to-Search style text selection feature.
+     *
+     * @param selectedText The text selected by the user from OCR
+     * @param maxOptions Maximum number of options to generate
+     * @return A flow of TextOptionStreamEvent for streaming results
+     */
+    fun generateTextOptions(
+            selectedText: String,
+            maxOptions: Int = 5
+    ): Flow<TextOptionStreamEvent>
+}
+
+/** Events emitted during streaming text option generation */
+sealed class TextOptionStreamEvent {
+    /** A token was generated */
+    data class Token(val token: String, val fullText: String) : TextOptionStreamEvent()
+
+    /** Generation complete with parsed options */
+    data class Complete(val options: List<TextOption>) : TextOptionStreamEvent()
+
+    /** An error occurred */
+    data class Error(val message: String) : TextOptionStreamEvent()
+}
+
+/** An option/action that can be performed on selected text */
+data class TextOption(
+        val id: String = java.util.UUID.randomUUID().toString(),
+        val title: String,
+        val description: String,
+        val icon: TextOptionIcon = TextOptionIcon.INFO,
+        val action: com.example.omni_link.data.AIAction
+) {
+    enum class TextOptionIcon {
+        SEARCH, COPY, SHARE, PHONE, SMS, EMAIL, MAP, CALENDAR, WEB, TRANSLATE, DEFINE, INFO
+    }
 }
 
 /** Events emitted during streaming suggestion generation */

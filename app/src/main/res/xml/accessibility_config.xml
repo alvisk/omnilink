@@ -5,6 +5,7 @@
     android:notificationTimeout="50"
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
+    android:canTakeScreenshot="true"
     android:canRequestTouchExplorationMode="false"
     android:settingsActivity="com.example.omni_link.MainActivity"
     android:accessibilityFlags="flagDefault|flagReportViewIds|flagIncludeNotImportantViews|flagRequestFilterKeyEvents"
