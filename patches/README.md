@@ -131,3 +131,5 @@ adb shell pm enable com.nothing.ntessentialrecorder
 This patch is provided for educational purposes. Use at your own risk. Modifying system behavior may void warranty or cause instability. Always backup your data before making system modifications.
 
 
+
+

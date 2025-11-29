@@ -90,3 +90,5 @@ adb shell pm enable com.nothing.ntessentialrecorder
 ```
 
 
+
+
