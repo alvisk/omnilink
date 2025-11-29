@@ -11,6 +11,8 @@ import com.example.omni_link.ai.MemoryItem
 import com.example.omni_link.ai.ModelManager
 import com.example.omni_link.data.AIAction
 import com.example.omni_link.data.ActionResult
+import com.example.omni_link.data.FocusAreaSelectionState
+import com.example.omni_link.data.FocusRegion
 import com.example.omni_link.data.ScreenState
 import com.example.omni_link.data.Suggestion
 import com.example.omni_link.data.SuggestionState
@@ -108,6 +110,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
             executeSuggestion(suggestion)
         }
         OmniAccessibilityService.onDismissSuggestions = { hideSuggestions() }
+
+        // Focus area callbacks
+        OmniAccessibilityService.onFocusAreaSelectionStart = { x, y ->
+            onFocusAreaSelectionStart(x, y)
+        }
+        OmniAccessibilityService.onFocusAreaSelectionUpdate = { x, y ->
+            onFocusAreaSelectionUpdate(x, y)
+        }
+        OmniAccessibilityService.onFocusAreaSelectionEnd = { onFocusAreaSelectionEnd() }
+        OmniAccessibilityService.onFocusAreaClear = { clearFocusRegion() }
+        OmniAccessibilityService.onFocusAreaConfirm = { confirmFocusArea() }
     }
 
     /**
@@ -605,6 +618,15 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
+            // Get the focus region if set
+            val focusRegion = _suggestionState.value.focusRegion
+            val screenContext =
+                    if (focusRegion != null) {
+                        currentScreen.toPromptContextWithFocus(focusRegion)
+                    } else {
+                        currentScreen.toPromptContext()
+                    }
+
             // Show loading state with streaming enabled
             _suggestionState.update {
                 it.copy(
@@ -613,13 +635,17 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
                         isStreaming = true,
                         streamingText = "",
                         error = null,
-                        lastScreenContext = currentScreen.toPromptContext()
+                        lastScreenContext = screenContext
                 )
             }
 
             try {
-                // Use streaming generation
-                llmProvider.generateSuggestionsStreaming(currentScreen, maxSuggestions = 5)
+                // Use streaming generation with focus region awareness
+                llmProvider.generateSuggestionsStreaming(
+                                currentScreen,
+                                maxSuggestions = 5,
+                                focusRegion = focusRegion
+                        )
                         .collect { event ->
                             when (event) {
                                 is com.example.omni_link.ai.SuggestionStreamEvent.Token -> {
@@ -727,6 +753,161 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FOCUS AREA METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Enable focus area selection mode */
+    fun enableFocusAreaMode() {
+        DebugLogManager.info(
+                TAG,
+                "Focus area mode enabled",
+                "User can now select an area of interest"
+        )
+        _suggestionState.update {
+            it.copy(
+                    isFocusAreaModeEnabled = true,
+                    focusAreaSelectionState = FocusAreaSelectionState()
+            )
+        }
+        OmniAccessibilityService.instance?.showFocusAreaSelector()
+    }
+
+    /** Disable focus area selection mode */
+    fun disableFocusAreaMode() {
+        _suggestionState.update {
+            it.copy(
+                    isFocusAreaModeEnabled = false,
+                    focusAreaSelectionState = FocusAreaSelectionState()
+            )
+        }
+        OmniAccessibilityService.instance?.hideFocusAreaSelector()
+    }
+
+    /** Called when user starts dragging to select a focus area */
+    fun onFocusAreaSelectionStart(x: Float, y: Float) {
+        _suggestionState.update {
+            it.copy(
+                    focusAreaSelectionState =
+                            FocusAreaSelectionState(
+                                    isSelecting = true,
+                                    startX = x,
+                                    startY = y,
+                                    currentX = x,
+                                    currentY = y
+                            )
+            )
+        }
+    }
+
+    /** Called while user is dragging to update the selection rectangle */
+    fun onFocusAreaSelectionUpdate(x: Float, y: Float) {
+        _suggestionState.update {
+            it.copy(
+                    focusAreaSelectionState =
+                            it.focusAreaSelectionState.copy(currentX = x, currentY = y)
+            )
+        }
+    }
+
+    /** Called when user finishes selecting a focus area - auto-triggers analysis */
+    fun onFocusAreaSelectionEnd() {
+        val state = _suggestionState.value.focusAreaSelectionState
+
+        // Check if selection is large enough
+        val width = kotlin.math.abs(state.currentX - state.startX).toInt()
+        val height = kotlin.math.abs(state.currentY - state.startY).toInt()
+
+        if (FocusRegion.isValidSize(width, height)) {
+            val region =
+                    FocusRegion.fromTouchCoordinates(
+                            startX = state.startX,
+                            startY = state.startY,
+                            endX = state.currentX,
+                            endY = state.currentY
+                    )
+
+            DebugLogManager.info(
+                    TAG,
+                    "Focus area selected",
+                    "Bounds: ${region.bounds}\nSize: ${width}x${height}px"
+            )
+
+            _suggestionState.update {
+                it.copy(
+                        focusRegion = region,
+                        focusAreaSelectionState =
+                                it.focusAreaSelectionState.copy(
+                                        isSelecting = false,
+                                        currentRegion = region
+                                ),
+                        isFocusAreaModeEnabled = false
+                )
+            }
+
+            // Auto-close selector and trigger analysis
+            OmniAccessibilityService.instance?.hideFocusAreaSelector()
+
+            // Small delay to let UI update, then show suggestions with focus
+            viewModelScope.launch {
+                delay(100)
+                showSuggestions()
+            }
+        } else {
+            // Selection too small - still close the selector but don't set focus
+            DebugLogManager.info(TAG, "Focus area too small", "Min size: ${FocusRegion.MIN_SIZE}px")
+            _suggestionState.update {
+                it.copy(
+                        focusAreaSelectionState =
+                                it.focusAreaSelectionState.copy(isSelecting = false),
+                        isFocusAreaModeEnabled = false
+                )
+            }
+
+            // Close selector and go back to suggestions
+            OmniAccessibilityService.instance?.hideFocusAreaSelector()
+            viewModelScope.launch {
+                delay(100)
+                showSuggestions()
+            }
+        }
+    }
+
+    /** Clear the current focus region and re-analyze full screen */
+    fun clearFocusRegion() {
+        DebugLogManager.info(TAG, "Focus area cleared", "AI will analyze the full screen")
+        _suggestionState.update {
+            it.copy(focusRegion = null, focusAreaSelectionState = FocusAreaSelectionState())
+        }
+        // Re-generate suggestions for full screen
+        generateSuggestions()
+    }
+
+    /** Cancel focus area selection and return to suggestions */
+    fun confirmFocusArea() {
+        // This is called when user taps cancel/dismiss without making a selection
+        // Just close the selector and go back to suggestions
+        _suggestionState.update {
+            it.copy(
+                    isFocusAreaModeEnabled = false,
+                    focusAreaSelectionState = FocusAreaSelectionState()
+            )
+        }
+        OmniAccessibilityService.instance?.hideFocusAreaSelector()
+
+        // Show suggestions with existing focus (if any)
+        viewModelScope.launch {
+            delay(100)
+            showSuggestions()
+        }
+    }
+
+    /** Check if there's an active focus region */
+    fun hasFocusRegion(): Boolean = _suggestionState.value.focusRegion != null
+
+    /** Get the current focus region */
+    fun getFocusRegion(): FocusRegion? = _suggestionState.value.focusRegion
+
     /** Enable floating overlay button */
     fun enableFloatingOverlay() {
         OmniAccessibilityService.instance?.showFloatingButton()
@@ -777,6 +958,12 @@ class OmniViewModel(application: Application) : AndroidViewModel(application) {
         OmniAccessibilityService.onSuggestionButtonClicked = null
         OmniAccessibilityService.onSuggestionClicked = null
         OmniAccessibilityService.onDismissSuggestions = null
+        // Clear focus area callbacks
+        OmniAccessibilityService.onFocusAreaSelectionStart = null
+        OmniAccessibilityService.onFocusAreaSelectionUpdate = null
+        OmniAccessibilityService.onFocusAreaSelectionEnd = null
+        OmniAccessibilityService.onFocusAreaClear = null
+        OmniAccessibilityService.onFocusAreaConfirm = null
         viewModelScope.launch { llmProvider.unloadModel() }
     }
 }

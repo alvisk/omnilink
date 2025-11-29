@@ -109,5 +109,10 @@ configurations.all {
     resolutionStrategy {
         force("androidx.core:core-ktx:1.15.0")
         force("androidx.core:core:1.15.0")
+        // Force Kotlin 2.2.0 to match Cactus SDK requirements
+        force("org.jetbrains.kotlin:kotlin-stdlib:2.2.0")
+        force("org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.2.0")
+        force("org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.2.0")
+        force("org.jetbrains.kotlin:kotlin-stdlib-common:2.2.0")
     }
 }

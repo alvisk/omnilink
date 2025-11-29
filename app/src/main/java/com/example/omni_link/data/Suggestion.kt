@@ -44,5 +44,9 @@ data class SuggestionState(
         val error: String? = null,
         val lastScreenContext: String? = null,
         val streamingText: String = "", // Real-time AI thinking output
-        val isStreaming: Boolean = false
+        val isStreaming: Boolean = false,
+        // Focus area feature
+        val focusRegion: FocusRegion? = null,
+        val focusAreaSelectionState: FocusAreaSelectionState = FocusAreaSelectionState(),
+        val isFocusAreaModeEnabled: Boolean = false
 )

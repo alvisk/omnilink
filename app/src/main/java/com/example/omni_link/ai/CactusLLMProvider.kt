@@ -8,6 +8,7 @@ import com.cactus.CactusLM
 import com.cactus.ChatMessage as CactusChatMessage
 import com.example.omni_link.data.AIAction
 import com.example.omni_link.data.ActionPlan
+import com.example.omni_link.data.FocusRegion
 import com.example.omni_link.data.ScreenState
 import com.example.omni_link.data.Suggestion
 import com.example.omni_link.debug.DebugLogManager
@@ -18,6 +19,8 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -152,6 +155,9 @@ Always respond in this JSON format:
 
     // Cactus LLM instance
     private var cactusLM: CactusLM? = null
+
+    // Mutex to prevent concurrent access to native Cactus library (not thread-safe)
+    private val inferenceMutex = Mutex()
 
     // Flag to indicate if real Cactus inference is available
     private var cactusAvailable = false
@@ -606,8 +612,17 @@ Return ONLY a JSON array. Each object must have these exact fields:
 - "type": one of: dial, sms, search, maps, calendar, alarm, timer, email, camera, copy, share, settings_wifi, settings_bluetooth
 - "value": the target (phone number, search query, address, etc.)
 
+For CALENDAR type, include these extra fields if available:
+- "event_title": the name of the event
+- "event_description": details about the event
+- "event_location": where the event takes place
+- "event_date": date string (e.g. "2024-12-25" or "tomorrow" or "next Monday")
+- "event_time": time string (e.g. "14:30" or "2:30 PM")
+- "event_duration_minutes": how long in minutes (default 60)
+
 Example response format:
 [{"title":"📞 Call 07483225245","description":"Dial this phone number","type":"dial","value":"07483225245"}]
+[{"title":"📅 Add Meeting","description":"Schedule this event","type":"calendar","event_title":"Team Meeting","event_description":"Weekly sync","event_location":"Conference Room A","event_date":"2024-12-20","event_time":"10:00","event_duration_minutes":60}]
 
 JSON array:"""
 
@@ -622,11 +637,13 @@ JSON array:"""
         val startTime = System.currentTimeMillis()
         // 🚀 PERFORMANCE: Increased tokens slightly for complete JSON, very low temp for
         // consistency
-        val result =
-                cactusLM!!.generateCompletion(
-                        messages = cactusMessages,
-                        params = CactusCompletionParams(maxTokens = 400, temperature = 0.1)
-                )
+        // Use mutex to prevent concurrent native library access (causes SIGSEGV)
+        val result = inferenceMutex.withLock {
+            cactusLM!!.generateCompletion(
+                    messages = cactusMessages,
+                    params = CactusCompletionParams(maxTokens = 400, temperature = 0.1)
+            )
+        }
         val inferenceTime = System.currentTimeMillis() - startTime
 
         val responseContent = result?.response
@@ -900,11 +917,19 @@ JSON array:"""
                     // Support both "value" (from prompt) and "target" (legacy) field names
                     val value = obj.get("value")?.asString ?: obj.get("target")?.asString
 
+                    // For calendar type, extract full event details
+                    val action =
+                            if (type.lowercase() == "calendar") {
+                                createCalendarAction(obj)
+                            } else {
+                                createActionFromType(type, value, screenState)
+                            }
+
                     Suggestion(
                             id = UUID.randomUUID().toString(),
                             title = title,
                             description = description,
-                            action = createActionFromType(type, value, screenState),
+                            action = action,
                             icon = getIconFromType(type),
                             priority = jsonArray.size() - index
                     )
@@ -998,6 +1023,312 @@ JSON array:"""
             )
         }
         return null
+    }
+
+    /**
+     * Create a calendar action with full event details from JSON object Parses event_title,
+     * event_description, event_location, event_date, event_time, event_duration_minutes
+     */
+    private fun createCalendarAction(jsonObj: com.google.gson.JsonObject): AIAction {
+        val eventTitle =
+                jsonObj.get("event_title")?.asString
+                        ?: jsonObj.get("value")?.asString ?: jsonObj.get("target")?.asString
+        val eventDescription = jsonObj.get("event_description")?.asString
+        val eventLocation = jsonObj.get("event_location")?.asString
+        val eventDate = jsonObj.get("event_date")?.asString
+        val eventTime = jsonObj.get("event_time")?.asString
+        val durationMinutes = jsonObj.get("event_duration_minutes")?.asInt ?: 60
+
+        // Parse date and time into milliseconds
+        val startTimeMillis = parseEventDateTime(eventDate, eventTime)
+        val endTimeMillis = startTimeMillis?.let { it + (durationMinutes * 60 * 1000L) }
+
+        return AIAction.OpenCalendar(
+                title = eventTitle,
+                description = eventDescription,
+                location = eventLocation,
+                startTime = startTimeMillis,
+                endTime = endTimeMillis
+        )
+    }
+
+    /**
+     * Parse date and time strings into milliseconds since epoch Supports formats like "2024-12-25",
+     * "tomorrow", "next Monday", "14:30", "2:30 PM"
+     */
+    private fun parseEventDateTime(dateStr: String?, timeStr: String?): Long? {
+        if (dateStr == null && timeStr == null) return null
+
+        val calendar = java.util.Calendar.getInstance()
+
+        // Parse date if provided
+        if (dateStr != null) {
+            val dateLower = dateStr.lowercase().trim()
+            when {
+                dateLower == "today" -> {
+                    /* calendar is already today */
+                }
+                dateLower == "tomorrow" -> calendar.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                dateLower.startsWith("next ") -> {
+                    val dayName = dateLower.removePrefix("next ").trim()
+                    val targetDay = parseDayOfWeek(dayName)
+                    if (targetDay != null) {
+                        val currentDay = calendar.get(java.util.Calendar.DAY_OF_WEEK)
+                        var daysToAdd = targetDay - currentDay
+                        if (daysToAdd <= 0) daysToAdd += 7
+                        calendar.add(java.util.Calendar.DAY_OF_YEAR, daysToAdd)
+                    }
+                }
+                dateLower.matches(Regex("""\d{4}-\d{2}-\d{2}""")) -> {
+                    // ISO format: 2024-12-25
+                    try {
+                        val parts = dateLower.split("-")
+                        calendar.set(java.util.Calendar.YEAR, parts[0].toInt())
+                        calendar.set(java.util.Calendar.MONTH, parts[1].toInt() - 1)
+                        calendar.set(java.util.Calendar.DAY_OF_MONTH, parts[2].toInt())
+                    } catch (e: Exception) {
+                        /* keep current date */
+                    }
+                }
+                dateLower.matches(Regex("""\d{1,2}/\d{1,2}/\d{2,4}""")) -> {
+                    // US format: 12/25/2024 or 12/25/24
+                    try {
+                        val parts = dateLower.split("/")
+                        calendar.set(java.util.Calendar.MONTH, parts[0].toInt() - 1)
+                        calendar.set(java.util.Calendar.DAY_OF_MONTH, parts[1].toInt())
+                        val year = parts[2].toInt()
+                        calendar.set(java.util.Calendar.YEAR, if (year < 100) 2000 + year else year)
+                    } catch (e: Exception) {
+                        /* keep current date */
+                    }
+                }
+                dateLower.matches(
+                        Regex("""(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec).*""")
+                ) -> {
+                    // Month name format: "Dec 25" or "December 25, 2024"
+                    try {
+                        val monthMatch =
+                                Regex("""(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)""")
+                                        .find(dateLower)
+                        val dayMatch = Regex("""\d{1,2}""").find(dateLower)
+                        val yearMatch = Regex("""\d{4}""").find(dateLower)
+
+                        if (monthMatch != null && dayMatch != null) {
+                            val monthNum =
+                                    when (monthMatch.value) {
+                                        "jan" -> 0
+                                        "feb" -> 1
+                                        "mar" -> 2
+                                        "apr" -> 3
+                                        "may" -> 4
+                                        "jun" -> 5
+                                        "jul" -> 6
+                                        "aug" -> 7
+                                        "sep" -> 8
+                                        "oct" -> 9
+                                        "nov" -> 10
+                                        "dec" -> 11
+                                        else -> 0
+                                    }
+                            calendar.set(java.util.Calendar.MONTH, monthNum)
+                            calendar.set(java.util.Calendar.DAY_OF_MONTH, dayMatch.value.toInt())
+                            if (yearMatch != null) {
+                                calendar.set(java.util.Calendar.YEAR, yearMatch.value.toInt())
+                            }
+                        }
+                    } catch (e: Exception) {
+                        /* keep current date */
+                    }
+                }
+            }
+        }
+
+        // Parse time if provided
+        if (timeStr != null) {
+            val timeLower = timeStr.lowercase().trim()
+            try {
+                when {
+                    timeLower.matches(
+                            Regex("""\d{1,2}:\d{2}\s*(am|pm)?""", RegexOption.IGNORE_CASE)
+                    ) -> {
+                        val isPM = timeLower.contains("pm", ignoreCase = true)
+                        val isAM = timeLower.contains("am", ignoreCase = true)
+                        val timeClean = timeLower.replace(Regex("[apmAPM\\s]"), "")
+                        val parts = timeClean.split(":")
+                        var hour = parts[0].toInt()
+                        val minute = parts[1].toInt()
+
+                        // Handle 12-hour format
+                        if (isPM && hour < 12) hour += 12
+                        if (isAM && hour == 12) hour = 0
+
+                        calendar.set(java.util.Calendar.HOUR_OF_DAY, hour)
+                        calendar.set(java.util.Calendar.MINUTE, minute)
+                        calendar.set(java.util.Calendar.SECOND, 0)
+                        calendar.set(java.util.Calendar.MILLISECOND, 0)
+                    }
+                }
+            } catch (e: Exception) {
+                /* keep current time */
+            }
+        } else {
+            // Default to 9:00 AM if only date is provided
+            calendar.set(java.util.Calendar.HOUR_OF_DAY, 9)
+            calendar.set(java.util.Calendar.MINUTE, 0)
+            calendar.set(java.util.Calendar.SECOND, 0)
+            calendar.set(java.util.Calendar.MILLISECOND, 0)
+        }
+
+        return calendar.timeInMillis
+    }
+
+    /** Parse day of week name to Calendar constant */
+    private fun parseDayOfWeek(dayName: String): Int? {
+        return when (dayName.lowercase()) {
+            "sunday", "sun" -> java.util.Calendar.SUNDAY
+            "monday", "mon" -> java.util.Calendar.MONDAY
+            "tuesday", "tue", "tues" -> java.util.Calendar.TUESDAY
+            "wednesday", "wed" -> java.util.Calendar.WEDNESDAY
+            "thursday", "thu", "thurs" -> java.util.Calendar.THURSDAY
+            "friday", "fri" -> java.util.Calendar.FRIDAY
+            "saturday", "sat" -> java.util.Calendar.SATURDAY
+            else -> null
+        }
+    }
+
+    /** Data class to hold extracted event details from screen content */
+    private data class ExtractedEventDetails(
+            val title: String? = null,
+            val description: String? = null,
+            val location: String? = null,
+            val startTime: Long? = null,
+            val endTime: Long? = null
+    )
+
+    /**
+     * Extract potential event details from screen content using heuristics Looks for patterns like
+     * titles, dates, times, locations
+     */
+    private fun extractEventDetailsFromScreen(screenContext: String): ExtractedEventDetails {
+        var title: String? = null
+        var description: String? = null
+        var location: String? = null
+        var dateStr: String? = null
+        var timeStr: String? = null
+
+        val lines = screenContext.lines().map { it.trim() }.filter { it.isNotBlank() }
+
+        // Look for potential event title (first non-date/time line with reasonable length)
+        for (line in lines) {
+            val lineLower = line.lowercase()
+            // Skip if line looks like a date, time, or UI element
+            if (lineLower.matches(Regex(""".*\d{1,2}[:/]\d{2}.*""")) && line.length < 10) continue
+            if (lineLower.contains("button") ||
+                            lineLower.contains("click") ||
+                            lineLower.contains("tap")
+            )
+                    continue
+            if (line.length in 3..60 && !lineLower.startsWith("at ") && !lineLower.startsWith("on ")
+            ) {
+                title = line
+                break
+            }
+        }
+
+        // Extract date patterns
+        val datePatterns =
+                listOf(
+                        Regex("""\b(\d{4}-\d{2}-\d{2})\b"""), // ISO: 2024-12-25
+                        Regex("""\b(\d{1,2}/\d{1,2}/\d{2,4})\b"""), // US: 12/25/2024
+                        Regex("""\b(tomorrow|today)\b""", RegexOption.IGNORE_CASE),
+                        Regex(
+                                """\b(next\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b""",
+                                RegexOption.IGNORE_CASE
+                        ),
+                        Regex(
+                                """\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?)\b""",
+                                RegexOption.IGNORE_CASE
+                        )
+                )
+
+        for (pattern in datePatterns) {
+            val match = pattern.find(screenContext)
+            if (match != null) {
+                dateStr = match.value
+                break
+            }
+        }
+
+        // Extract time patterns
+        val timePatterns =
+                listOf(
+                        Regex("""\b(\d{1,2}:\d{2}\s*(?:am|pm)?)\b""", RegexOption.IGNORE_CASE),
+                        Regex("""\b(\d{1,2}\s*(?:am|pm))\b""", RegexOption.IGNORE_CASE)
+                )
+
+        for (pattern in timePatterns) {
+            val match = pattern.find(screenContext)
+            if (match != null) {
+                timeStr = match.value
+                break
+            }
+        }
+
+        // Extract location (look for common location indicators)
+        val locationPatterns =
+                listOf(
+                        Regex(
+                                """(?:at|location:|venue:|where:)\s*([^,\n]{5,50})""",
+                                RegexOption.IGNORE_CASE
+                        ),
+                        Regex(
+                                """(?:room|conference|office|building)\s+\w+""",
+                                RegexOption.IGNORE_CASE
+                        ),
+                        Regex(
+                                """\d+\s+\w+\s+(?:street|st|avenue|ave|road|rd|blvd|drive|dr)""",
+                                RegexOption.IGNORE_CASE
+                        )
+                )
+
+        for (pattern in locationPatterns) {
+            val match = pattern.find(screenContext)
+            if (match != null) {
+                location = match.groupValues.getOrNull(1) ?: match.value
+                location = location.trim()
+                break
+            }
+        }
+
+        // Parse the extracted date/time into milliseconds
+        val startTimeMillis = parseEventDateTime(dateStr, timeStr)
+        val endTimeMillis =
+                startTimeMillis?.let { it + (60 * 60 * 1000L) } // Default 1 hour duration
+
+        // Use remaining relevant text as description
+        if (title != null) {
+            val remainingLines =
+                    lines
+                            .filter {
+                                it != title &&
+                                        it.length > 10 &&
+                                        !it.contains(dateStr ?: "____") &&
+                                        !it.contains(timeStr ?: "____") &&
+                                        !it.contains(location ?: "____")
+                            }
+                            .take(2)
+            if (remainingLines.isNotEmpty()) {
+                description = remainingLines.joinToString(". ")
+            }
+        }
+
+        return ExtractedEventDetails(
+                title = title,
+                description = description,
+                location = location,
+                startTime = startTimeMillis,
+                endTime = endTimeMillis
+        )
     }
 
     private fun createActionFromType(
@@ -1150,12 +1481,20 @@ JSON array:"""
 
         // Add context-relevant suggestions first
         if (isCalendarContext) {
+            // Try to extract event details from screen content
+            val eventDetails = extractEventDetailsFromScreen(screenContext)
             suggestions.add(
                     createSuggestion(
-                            "📅 Create Event",
-                            "Add new calendar event",
+                            "📅 Create Event" + (eventDetails.title?.let { ": $it" } ?: ""),
+                            eventDetails.description ?: "Add new calendar event",
                             Suggestion.SuggestionIcon.CALENDAR,
-                            AIAction.OpenCalendar()
+                            AIAction.OpenCalendar(
+                                    title = eventDetails.title,
+                                    description = eventDetails.description,
+                                    location = eventDetails.location,
+                                    startTime = eventDetails.startTime,
+                                    endTime = eventDetails.endTime
+                            )
                     )
             )
         }
@@ -2298,10 +2637,13 @@ JSON array:"""
     /**
      * Generate suggestions with streaming output so users can see AI thinking in real-time. Uses
      * the onToken callback from Cactus SDK to emit tokens as they're generated.
+     *
+     * @param focusRegion Optional focus region to limit AI attention to a specific screen area
      */
     override fun generateSuggestionsStreaming(
             screenState: ScreenState,
-            maxSuggestions: Int
+            maxSuggestions: Int,
+            focusRegion: FocusRegion?
     ): kotlinx.coroutines.flow.Flow<SuggestionStreamEvent> = callbackFlow {
         try {
             if (!isModelLoaded) {
@@ -2310,13 +2652,26 @@ JSON array:"""
                 return@callbackFlow
             }
 
-            val screenContext = screenState.toPromptContext()
-            Log.d(TAG, "Starting streaming suggestion generation for: ${screenState.packageName}")
+            // Use focused context if a focus region is set
+            val screenContext =
+                    if (focusRegion != null) {
+                        screenState.toPromptContextWithFocus(focusRegion)
+                    } else {
+                        screenState.toPromptContext()
+                    }
+
+            val focusInfo = if (focusRegion != null) " [FOCUS AREA ACTIVE]" else ""
+            Log.d(
+                    TAG,
+                    "Starting streaming suggestion generation for: ${screenState.packageName}$focusInfo"
+            )
 
             DebugLogManager.info(
                     TAG,
                     "Starting streaming suggestion generation",
-                    "App: ${screenState.packageName}\nMax suggestions: $maxSuggestions"
+                    "App: ${screenState.packageName}\n" +
+                            "Max suggestions: $maxSuggestions\n" +
+                            "Focus region: ${focusRegion?.bounds ?: "Full screen"}"
             )
 
             if (!cactusAvailable || cactusLM == null) {
@@ -2329,8 +2684,8 @@ JSON array:"""
                 return@callbackFlow
             }
 
-            // Build the prompt
-            val suggestionPrompt = buildStreamingPrompt(screenContext, maxSuggestions)
+            // Build the prompt with focus region awareness
+            val suggestionPrompt = buildStreamingPrompt(screenContext, maxSuggestions, focusRegion)
 
             DebugLogManager.prompt(
                     TAG,
@@ -2343,16 +2698,18 @@ JSON array:"""
             val fullResponse = StringBuilder()
 
             // Generate completion with streaming via onToken callback
-            val result =
-                    cactusLM!!.generateCompletion(
-                            messages = cactusMessages,
-                            params = CactusCompletionParams(maxTokens = 400, temperature = 0.1),
-                            onToken = { token, _ ->
-                                fullResponse.append(token)
-                                // Emit each token so UI can show progress
-                                trySend(SuggestionStreamEvent.Token(token, fullResponse.toString()))
-                            }
-                    )
+            // Use mutex to prevent concurrent native library access (causes SIGSEGV)
+            val result = inferenceMutex.withLock {
+                cactusLM!!.generateCompletion(
+                        messages = cactusMessages,
+                        params = CactusCompletionParams(maxTokens = 400, temperature = 0.1),
+                        onToken = { token, _ ->
+                            fullResponse.append(token)
+                            // Emit each token so UI can show progress
+                            trySend(SuggestionStreamEvent.Token(token, fullResponse.toString()))
+                        }
+                )
+            }
 
             val responseContent = result?.response ?: fullResponse.toString()
             DebugLogManager.response(TAG, "Streaming complete", "Response:\n$responseContent")
@@ -2384,9 +2741,22 @@ JSON array:"""
     }
 
     /** Build the prompt for streaming suggestions */
-    private fun buildStreamingPrompt(screenContext: String, maxSuggestions: Int): String {
-        return """You are a mobile assistant. Based on the screen below, suggest $maxSuggestions helpful actions.
+    private fun buildStreamingPrompt(
+            screenContext: String,
+            maxSuggestions: Int,
+            focusRegion: FocusRegion? = null
+    ): String {
+        val focusInstruction =
+                if (focusRegion != null) {
+                    """
+IMPORTANT: The user has selected a FOCUS AREA on the screen.
+Pay special attention to elements marked as "FOCUSED ELEMENTS" - these are the user's area of interest.
+Prioritize suggestions for elements within the focus area over other screen elements.
+"""
+                } else ""
 
+        return """You are a mobile assistant. Based on the screen below, suggest $maxSuggestions helpful actions.
+$focusInstruction
 SCREEN:
 $screenContext
 

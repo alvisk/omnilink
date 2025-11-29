@@ -62,6 +62,54 @@ data class ScreenState(
         }
     }
 
+    /** Convert screen state to a prompt-friendly format, focusing on a specific region */
+    fun toPromptContextWithFocus(focusRegion: FocusRegion): String {
+        val allElements = flattenElements()
+
+        // Prioritize elements within or overlapping the focus region
+        val focusedElements =
+                allElements
+                        .filter { it.isClickable || it.isEditable || it.getLabel() != null }
+                        .sortedByDescending { element ->
+                            focusRegion.overlapPercentage(element.bounds)
+                        }
+                        .take(30) // Take more elements since we're being selective
+
+        // Separate elements by relevance to focus area
+        val inFocusElements =
+                focusedElements.filter { focusRegion.overlapPercentage(it.bounds) > 0.3f }
+        val nearFocusElements =
+                focusedElements
+                        .filter {
+                            focusRegion.overlapPercentage(it.bounds) > 0f &&
+                                    focusRegion.overlapPercentage(it.bounds) <= 0.3f
+                        }
+                        .take(5)
+
+        return buildString {
+            appendLine("Current App: $packageName")
+            activityName?.let { appendLine("Screen: ${it.substringAfterLast(".")}") }
+            appendLine()
+            appendLine(focusRegion.toPromptContext())
+            appendLine()
+            appendLine("🎯 FOCUSED ELEMENTS (within selected area):")
+            if (inFocusElements.isNotEmpty()) {
+                inFocusElements.forEachIndexed { index, element ->
+                    appendLine("  $index: ${element.toPromptString()}")
+                }
+            } else {
+                appendLine("  (No interactive elements in selected area)")
+            }
+            if (nearFocusElements.isNotEmpty()) {
+                appendLine()
+                appendLine("📍 NEARBY ELEMENTS (adjacent to focus area):")
+                nearFocusElements.forEachIndexed { index, element ->
+                    appendLine("  ${inFocusElements.size + index}: ${element.toPromptString()}")
+                }
+            }
+        }
+    }
+
     /** Flatten the element tree into a list */
     fun flattenElements(): List<ScreenElement> {
         val result = mutableListOf<ScreenElement>()
@@ -71,6 +119,16 @@ data class ScreenState(
         }
         elements.forEach { traverse(it) }
         return result
+    }
+
+    /** Get elements filtered by a focus region */
+    fun getElementsInRegion(
+            focusRegion: FocusRegion,
+            minOverlap: Float = 0.1f
+    ): List<ScreenElement> {
+        return flattenElements().filter { element ->
+            focusRegion.overlapPercentage(element.bounds) >= minOverlap
+        }
     }
 
     /** Find an element by its label (text or content description) */

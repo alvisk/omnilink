@@ -1,6 +1,7 @@
 package com.example.omni_link.ai
 
 import com.example.omni_link.data.ActionPlan
+import com.example.omni_link.data.FocusRegion
 import com.example.omni_link.data.ScreenState
 import com.example.omni_link.data.Suggestion
 import kotlinx.coroutines.flow.Flow
@@ -41,10 +42,13 @@ interface LLMProvider {
      * - Token: individual tokens as they're generated
      * - Complete: final parsed suggestions
      * - Error: if something goes wrong
+     *
+     * @param focusRegion Optional region of interest to focus the AI's attention on
      */
     fun generateSuggestionsStreaming(
             screenState: ScreenState,
-            maxSuggestions: Int = 5
+            maxSuggestions: Int = 5,
+            focusRegion: FocusRegion? = null
     ): Flow<SuggestionStreamEvent>
 }
 

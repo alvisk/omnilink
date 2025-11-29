@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.omni_link.data.FocusRegion
 import com.example.omni_link.data.Suggestion
 import com.example.omni_link.data.SuggestionState
 import com.example.omni_link.ui.theme.*
@@ -140,6 +141,8 @@ fun SuggestionsPanel(
         state: SuggestionState,
         onSuggestionClick: (Suggestion) -> Unit,
         onDismiss: () -> Unit,
+        onFocusAreaClick: () -> Unit = {},
+        onClearFocusArea: () -> Unit = {},
         modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -160,7 +163,10 @@ fun SuggestionsPanel(
                         isLoading = state.isLoading,
                         isStreaming = state.isStreaming,
                         suggestionCount = state.suggestions.size,
-                        onDismiss = onDismiss
+                        focusRegion = state.focusRegion,
+                        onDismiss = onDismiss,
+                        onFocusAreaClick = onFocusAreaClick,
+                        onClearFocusArea = onClearFocusArea
                 )
 
                 // Red accent line
@@ -197,7 +203,10 @@ private fun SuggestionsPanelHeader(
         isLoading: Boolean,
         isStreaming: Boolean = false,
         suggestionCount: Int,
-        onDismiss: () -> Unit
+        focusRegion: FocusRegion? = null,
+        onDismiss: () -> Unit,
+        onFocusAreaClick: () -> Unit = {},
+        onClearFocusArea: () -> Unit = {}
 ) {
     Row(
             modifier =
@@ -243,24 +252,59 @@ private fun SuggestionsPanelHeader(
         Spacer(modifier = Modifier.width(12.dp))
 
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                    text = "SUGGESTIONS",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = OmniWhite,
-                    letterSpacing = 3.sp
-            )
+            Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                        text = "SUGGESTIONS",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OmniWhite,
+                        letterSpacing = 3.sp
+                )
+
+                // Focus area indicator
+                if (focusRegion != null) {
+                    FocusAreaIndicator(focusRegion = focusRegion, onClear = onClearFocusArea)
+                }
+            }
             Text(
                     text =
                             when {
                                 isStreaming -> "AI THINKING..."
-                                isLoading -> "ANALYZING SCREEN..."
+                                isLoading ->
+                                        if (focusRegion != null) "ANALYZING FOCUS AREA..."
+                                        else "ANALYZING SCREEN..."
+                                focusRegion != null -> "$suggestionCount AVAILABLE (FOCUSED)"
                                 else -> "$suggestionCount AVAILABLE"
                             },
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (isStreaming) OmniYellow else OmniGrayText,
+                    color =
+                            when {
+                                isStreaming -> OmniYellow
+                                focusRegion != null -> OmniYellow
+                                else -> OmniGrayText
+                            },
                     letterSpacing = 1.sp
             )
         }
+
+        // Focus area button
+        IconButton(
+                onClick = onFocusAreaClick,
+                modifier =
+                        Modifier.size(32.dp)
+                                .background(if (focusRegion != null) OmniYellow else OmniGrayMid)
+        ) {
+            Icon(
+                    imageVector = Icons.Outlined.CropFree,
+                    contentDescription = "Select focus area",
+                    tint = if (focusRegion != null) OmniBlack else OmniWhite,
+                    modifier = Modifier.size(18.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
 
         // Close button
         IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp).background(OmniGrayMid)) {
@@ -589,7 +633,9 @@ fun OmniOverlay(
         state: SuggestionState,
         onButtonClick: () -> Unit,
         onSuggestionClick: (Suggestion) -> Unit,
-        onDismiss: () -> Unit
+        onDismiss: () -> Unit,
+        onFocusAreaClick: () -> Unit = {},
+        onClearFocusArea: () -> Unit = {}
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         // Suggestions panel at bottom
@@ -597,6 +643,8 @@ fun OmniOverlay(
                 state = state,
                 onSuggestionClick = onSuggestionClick,
                 onDismiss = onDismiss,
+                onFocusAreaClick = onFocusAreaClick,
+                onClearFocusArea = onClearFocusArea,
                 modifier = Modifier.align(Alignment.BottomCenter)
         )
 

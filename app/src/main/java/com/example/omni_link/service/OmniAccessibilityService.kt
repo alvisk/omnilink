@@ -43,6 +43,7 @@ import com.example.omni_link.data.SuggestionState
 import com.example.omni_link.debug.DebugLogManager
 import com.example.omni_link.ui.DebugFloatingButton
 import com.example.omni_link.ui.DebugOverlayPanel
+import com.example.omni_link.ui.FocusAreaSelectorOverlay
 import com.example.omni_link.ui.OmniFloatingButton
 import com.example.omni_link.ui.OmniOverlay
 import kotlinx.coroutines.*
@@ -79,6 +80,13 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
         var onSuggestionButtonClicked: (() -> Unit)? = null
         var onSuggestionClicked: ((Suggestion) -> Unit)? = null
         var onDismissSuggestions: (() -> Unit)? = null
+
+        // Focus area callbacks
+        var onFocusAreaSelectionStart: ((Float, Float) -> Unit)? = null
+        var onFocusAreaSelectionUpdate: ((Float, Float) -> Unit)? = null
+        var onFocusAreaSelectionEnd: (() -> Unit)? = null
+        var onFocusAreaClear: (() -> Unit)? = null
+        var onFocusAreaConfirm: (() -> Unit)? = null
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -87,6 +95,7 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
     private var floatingButtonView: FrameLayout? = null
     private var debugButtonView: FrameLayout? = null
     private var debugOverlayView: FrameLayout? = null
+    private var focusAreaSelectorView: FrameLayout? = null
 
     // Debounce job for screen capture - cancel previous job when new event arrives
     private var screenCaptureJob: Job? = null
@@ -1168,6 +1177,16 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
                                 onDismiss = {
                                     Log.d(TAG, "Suggestions dismissed")
                                     onDismissSuggestions?.invoke()
+                                },
+                                onFocusAreaClick = {
+                                    Log.d(TAG, "Focus area button clicked")
+                                    // Hide suggestions overlay and show focus area selector
+                                    hideSuggestionsOverlay()
+                                    showFocusAreaSelector()
+                                },
+                                onClearFocusArea = {
+                                    Log.d(TAG, "Clear focus area clicked")
+                                    onFocusAreaClear?.invoke()
                                 }
                         )
                     }
@@ -1358,4 +1377,102 @@ class OmniAccessibilityService : AccessibilityService(), LifecycleOwner, SavedSt
 
     /** Check if debug overlay is enabled */
     fun isDebugOverlayEnabled(): Boolean = isDebugOverlayEnabled
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FOCUS AREA SELECTOR OVERLAY METHODS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Show the focus area selector overlay */
+    fun showFocusAreaSelector() {
+        hideFocusAreaSelector() // Remove existing if any
+
+        // Temporarily hide the floating button while selecting
+        floatingButtonView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error hiding floating button for focus selector", e)
+            }
+        }
+        floatingButtonView = null
+
+        val params =
+                WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                )
+        params.gravity = Gravity.TOP or Gravity.START
+
+        val container = FrameLayout(this)
+        container.setViewTreeLifecycleOwner(this)
+        container.setViewTreeSavedStateRegistryOwner(this)
+
+        val composeView =
+                ComposeView(this).apply {
+                    setContent {
+                        val suggestionState = _suggestionState.collectAsState()
+
+                        FocusAreaSelectorOverlay(
+                                selectionState = suggestionState.value.focusAreaSelectionState,
+                                currentRegion = suggestionState.value.focusRegion,
+                                onSelectionStart = { x, y ->
+                                    Log.d(TAG, "Focus area selection started at ($x, $y)")
+                                    onFocusAreaSelectionStart?.invoke(x, y)
+                                },
+                                onSelectionUpdate = { x, y ->
+                                    onFocusAreaSelectionUpdate?.invoke(x, y)
+                                },
+                                onSelectionEnd = {
+                                    Log.d(TAG, "Focus area selection ended")
+                                    onFocusAreaSelectionEnd?.invoke()
+                                },
+                                onClearFocus = {
+                                    Log.d(TAG, "Focus area cleared")
+                                    onFocusAreaClear?.invoke()
+                                },
+                                onDismiss = {
+                                    Log.d(TAG, "Focus area selector dismissed")
+                                    onFocusAreaConfirm?.invoke()
+                                }
+                        )
+                    }
+                }
+        container.addView(composeView)
+
+        focusAreaSelectorView = container
+        try {
+            windowManager?.addView(container, params)
+            Log.d(TAG, "Focus area selector overlay added")
+            DebugLogManager.info(
+                    TAG,
+                    "Focus area selector shown",
+                    "Draw a rectangle to select area of interest"
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding focus area selector overlay", e)
+            focusAreaSelectorView = null
+        }
+    }
+
+    /** Hide the focus area selector overlay */
+    fun hideFocusAreaSelector() {
+        focusAreaSelectorView?.let {
+            try {
+                windowManager?.removeView(it)
+                Log.d(TAG, "Focus area selector overlay removed")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing focus area selector overlay", e)
+            }
+        }
+        focusAreaSelectorView = null
+
+        // Restore floating button if it was enabled
+        if (isFloatingOverlayEnabled) {
+            showFloatingButton()
+        }
+    }
 }

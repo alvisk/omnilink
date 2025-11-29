@@ -437,3 +437,4 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ---
 
 *Generated from codebase analysis on Nov 28, 2025*
+
